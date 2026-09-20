@@ -1,114 +1,44 @@
-Continue on ldm-compress. Ground rules: do not commit or push; leave changes in the
-working tree. Run the full pytest suite after every phase. Report per phase in a short
-as-built summary (shapes only, no bank content). Do not touch the bare-command prepend
-path except where Phase 1 says so.
+Answers, in your numbering.
 
-PHASE 1 — bug fixes from your as-built report
-1. Binary name collision. On this machine `compress` resolves to /usr/bin/compress (LZW).
-   a. Every model-facing string must use the plugin binary's absolute path (the same
-      bin_abs route.wrap uses): footers (`… · <abs>/compress get 13 for more`), SKILL.md,
-      SessionStart context, hook additionalContext. Never a bare `compress`.
-   b. hooks.py:324: replace the `shutil.which("compress")` existence check with
-      `os.path.realpath(shutil.which(name))` compared to the plugin binary. /usr/bin/compress
-      must count as NOT installed.
-   c. Create the symlink under the non-colliding name `ldm-compress`, only into a directory
-      that is actually on PATH; otherwise log and skip. SessionStart context states both
-      forms: "<abs>/compress (alias: ldm-compress if on PATH)".
-   d. Tests: footer contains the absolute path; the realpath check rejects /usr/bin/compress.
-2. runner.py:124: `--sh` runs ["bash","-lc",…] while the Bash tool is zsh. Change to
-   [os.environ.get("SHELL") or "/bin/sh", "-c", …], no -l. Test it.
-3. Silent skips. route.py:249 skips with no record. Add a `decisions` table
-   (ts, session_id, shape, kind, reason) written by the hook for every Bash call —
-   kind ∈ {prepend, append, manual, skip} — and surface it in `compress stats` as a
-   reason breakdown ("skip: shell operators 412, never_wrap 38, …").
-4. Bump plugin.json and the marketplace entry to 0.4.0 (don't commit).
+1. Exit status: exact reproduction. k = original stage count, pipestatus[k]. The test
+   case was mine and wrong as written: the ORIGINAL is `printf '{' | jq .` (k=2) → 5.
+   Keep that, and add `printf '{' | jq . | cat` (k=3) → 0 to pin the semantics. Never
+   pipefail-like.
 
-PHASE 2 — measurement (report before starting Phase 3; Phase 3 proceeds unless Rishi says stop)
-Re-run the transcript analysis restricted to results > 5,000 B and > 10,000 B: top 15
-shapes each, split piped vs bare, plus how many sit at the ceiling (≥ 29,000 B). Also
-median bytes for: `gh --jq _ | base64 -d`, `python3 - _`, `rg -n _` as last stage,
-`sed -n _`, and `head/tail -N` with N ≥ 100.
+2. `>` vs `2>`: don't infer from tokens — use raw-string adjacency, on an analysis copy
+   only (the appended command always uses the untouched original text). Before
+   tokenising the copy, substitute r'(?<=[02-9])>{1,2}(?!&)' with a sentinel word
+   ` __FDREDIR__ ` (digit glued to `>` = fd redirect; `1>` is deliberately excluded so
+   it stays a stdout redirect; `2>&1` is already a distinct `>&` token). Any remaining
+   `>`/`>>` operator token in the last stage = stdout redirect → refuse. Any operator
+   token outside {| ; && || > >> < >&} (e.g. `&>`, `|&`, `<(`, `>(`) → refuse.
+   `echo 2 > file` (space) → refused, correct. `$2>file` → misread as fd redirect →
+   appended → filter sees empty stdin. Accepted false negative, harmless.
 
-PHASE 3 — pipeline capture by APPENDING a stage (§0c). Never prepend to a pipeline.
-Rewrite form:
-  <orig> | <bin> filter [--hint <preset>] --ref <nonce>; <bin> status "${pipestatus[k]:-${PIPESTATUS[k-1]:-$?}}"
-  - <orig> is the original command text, byte-for-byte untouched. Only constant text is added.
-  - <bin> = `ldm-compress` if shutil.which("ldm-compress") realpaths to the plugin binary,
-    else the absolute path.
-  - k = number of stages in the LAST pipeline (zsh is 1-based; bash index is one less;
-    $? covers the case where an earlier `cd` failed and the pipeline never ran).
-  - nonce = 8 hex chars. The hook writes ~/.cache/ldm-compress/pending/<nonce>.json
-    {cmd, shape, session, hint, ts} so the original command reaches the outputs row without
-    ever being passed as a shell argument.
+3. Permission gate: yes, add it, with one refinement. Apply `classify(raw) == "allowed"`
+   only when the hook input's permission_mode is default or acceptEdits. In
+   bypassPermissions/auto, Claude Code wouldn't have prompted for the raw command
+   either, so the gate would only withhold compression. Config: pipelines.require_allowed
+   (default true). `config allowlist` still prints the filter/status rules.
 
-New subcommands:
-  filter [--hint P] [--ref N] [--max-bytes B]: read all of stdin as bytes. If len ≤
-    default_max_bytes (4096, per-repo override, --max-bytes) → write stdin to stdout
-    byte-identical, no footer, no store. Else → store as an outputs row (source='filter',
-    cmd/shape from the pending file, consume it), index, render with the same renderer as
-    `run`: preset if --hint given and its json_path matches, otherwise generic slicing
-    (never the "structure only" empty-match view for pipelines). Footer format identical
-    to run's, omitting the exit field, using <bin>. Empty stdin → print nothing.
-  status <N>: sys.exit(int(N)); non-integer/empty → exit 0 and log a warning.
+4. filter cap: agreed. 64 MB, then stop reading, close stdin, store what was read, and
+   the footer says "input truncated at 64 MB".
 
-route.decide order: already-wrapped → never_wrap → if shape.has_shell_operators →
-pipeline branch → else existing bare branch (unchanged).
+5. Pending files: agreed. Delete on both paths; SessionStart purges nonces older than
+   1 hour.
 
-Pipeline branch:
-  Tokenise: shlex.shlex(cmd, posix=True, punctuation_chars=True), whitespace_split=True,
-  commenters=''. ValueError → skip "unbalanced quotes".
-  Refuse (skip, with reason recorded): newline/CR in cmd; raw cmd ends with `\`; any top-level
-  token starting with `#`; any token containing `$(` or a backtick; any top-level token in
-  { ( ) { } for while until if then else elif fi do done case esac function select time ! [[ ]] coproc };
-  operator tokens `&` (anywhere), `|&`, `<(`, `>(`; a `>`/`>>`/`1>` redirect on the last stage
-  (2>&1 and 2>/dev/null are fine).
-  Split at top-level `;` `&&` `||`. Earlier segments are left alone — they run in the tool's
-  shell exactly as before, so cd/export/mkdir prefixes just work. The LAST segment is the
-  candidate; split it at `|` into stages; require ≥ 2 stages (1-stage last segments fall
-  through to the bare branch).
-  Benefit gate on the tail stage (skip if it matches): wc; uniq -c; grep -c / grep -q;
-  jq length / jq keys; diff; cmp; test; [; xargs; head/tail with N ≤ 100 (default head = 10);
-  sed -n 'A,Bp' with B−A ≤ 100.
-  Triggers (any one; record which):
-    1. any stage matches a layer-1 preset rule → --hint that preset
-    2. shape_of(last pipeline) is in the offender table (it already produces keys like
-       `gh api <path> | jq <path>`; it is just never consulted today because operators are
-       checked first)
-    3. tail is a pretty-printer/decoder: jq with no filter or `.`, python3 -m json.tool, yq,
-       base64 -d, cat, column -t, xxd; or head/tail/sed -n with N > 100
-    4. circuit breaker tripped
-  No trigger → skip "no trigger" (so `a | b || echo failed` is skipped: last pipeline is
-  `echo failed`).
-  Return updatedInput with the rewritten command; record Decision(kind="append", reason=trigger).
-  PostToolUse: recognise the appended marker, record kind=append, link the outputs row by nonce.
+6. decisions table: agreed on single insert, but measure first. If the PreToolUse delta
+   is over 5 ms, append one line to a JSONL in PreToolUse instead and fold it into
+   SQLite in PostToolUse (which already opens the DB). Report the delta either way.
 
-Config: pipelines.enabled (true), pipelines.status_trailer (true),
-pipelines.reducer_max_lines (100). `compress config show --why "<cmd>"` must explain the
-pipeline decision (which gate failed or which trigger fired).
+Sequencing criterion for Phase 3: it's about bytes, not command count. Build it if the
+addressable set (pipelines that pass the benefit gate: pretty-printer/decoder tails or
+preset matches) accounts for ≥ 20% of results > 10,000 B, OR any ceiling hit
+(≥ 29,000 B) is a pipeline — those are silent truncations, the worst outcome. Below
+both → park Phase 3, finish Phases 1–2, and we revisit after the appsec trial, where
+scanner pipelines are the whole workload and your personal transcripts under-represent
+them.
 
-Manual path: add `run --stdin` (reads the command from stdin — quoted heredoc — runs via
-$SHELL -c). Deprecate --sh. `config allowlist` prints the two new rules in both forms
-(Bash(ldm-compress filter:*), Bash(ldm-compress status:*), and the absolute-path forms) and
-WARNS if any rule would match `run --stdin` or `run --sh`.
-SKILL.md: pipelines are handled automatically; use `run --stdin` with a heredoc only for
-chains the hook refuses; never add an allow rule for run --stdin.
-
-Tests (pytest): extend tests/test_route.py's matrix; add tests/test_filter.py and
-tests/test_pipeline_shell.py (subprocess against zsh and bash if present):
-  - `cat f | wc -l` untouched (answer 3)
-  - `printf '{' | jq . | cat` appended → trailer status 5
-  - `cd /nonexistent && x | y` → status 1; `export X=1 && printf $X | cat | cat` → X visible
-  - `'x|y'` quoted argument is not a stage
-  - `npm test 2>&1 | tail -300` appended; `… | tail -50` skipped
-  - refusals: comment, heredoc, $( ), `for … done`, trailing &, `> file` on last stage
-  - `a | b || echo failed` skipped (no trigger)
-  - passthrough byte-identical at 4,095 bytes incl. UTF-8 and binary; 200 KB JSON with
-    --hint snyk → slice + footer with <bin>; pending file consumed; two concurrent nonces
-    don't collide
-  - config show --why gives a reason for every case above
-
-PHASE 4 — wrap-up
-Full pytest, `claude plugin validate --strict`, then an as-built report: what changed per
-file, test counts before/after, five sample rewritten commands (shapes only), and the
-`compress stats` output format. Design `filter` so bare commands could be routed through
-it later (k = 1) — that decision is deferred to after the trial.
+Alias: confirmed. `ldm-compress` satisfies 1a in footers and SKILL.md, but only when
+shutil.which("ldm-compress") realpaths to the plugin binary at render time; otherwise
+fall back to the absolute path.
