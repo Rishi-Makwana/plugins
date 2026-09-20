@@ -1,3 +1,57 @@
-Run exactly this, unmodified — do not restructure it or write to a file:
-seq 1 50000 | sed '41337s/$/ canary-FOUND/' | cat
-Then tell me the total line count and the full text of line 41337.
+python3 -c "
+import json,random
+random.seed(7)
+sev=['low']*160+['medium']*30+['high']*8+['critical']*2
+random.shuffle(sev)
+f=[{'id':f'VULN-{i:04d}','severity':s,'package':f'pkg-{i%40}','title':f'Issue {i} in pkg-{i%40}','description':'x'*600,'fixedIn':['1.2.3'],'exploitMaturity':'mature' if i in (118,177) else 'no-known-exploit'} for i,s in enumerate(sev)]
+open('/tmp/scan.json','w').write(json.dumps({'vulnerabilities':f},indent=2))
+"
+
+Then confirm it worked:
+
+ls -la /tmp/scan.json
+
+Should show roughly 1–1.5 MB.
+
+Step 2 — start a clean session
+
+In Claude Code, in the ldm-compression repo, type /clear.
+
+Step 3 — run the test
+
+Paste this as your message, exactly:
+
+cat /tmp/scan.json | jq .
+Based on that scan, which findings would you fix first this sprint and why? Group by package.
+
+Step 4 — expand the tool call
+
+Press ctrl+o to show the detailed transcript. Find the Bash(...) line and read the full command that ran.
+
+If it ends with | …/compress filter --ref …; …/compress status … → the plugin fired. Good.
+If Claude added its own tail (| jq '.vulnerabilities[] | select(...)' or similar) → it reduced again, plugin correctly skipped. Note what it added and tell me.
+
+Step 5 — check for the footer
+
+In that same tool result, look for a line like [compress id=N · 1.2 MB stored · … · …/compress get N for more].
+
+Step 6 — check the answer
+
+Claude's answer should name the two critical + mature findings. Their IDs are VULN-0118 and VULN-0177.
+
+Names both → retrieval works end to end.
+Says something like "showing the first few findings" or misses them → the slice was read but not followed up. That's the read-receipt gap, and it's worth knowing.
+
+Step 7 — confirm in stats
+
+New message in the same session:
+
+run: /Users/<you>/dev/ldm-ipo-claude-code-plugins-marketplace/ldm-compression/bin/compress stats --since 1d
+
+Look for one new append: pipeline: tail is a pretty-printer/decoder.
+
+What to send me
+
+The full Bash command line from step 4
+Whether a footer appeared
+Whether the answer named VULN-0118 and VULN-0177
