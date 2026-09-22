@@ -1,0 +1,20 @@
+"""Snyk — `snyk test --json`. Two rows_path candidates: --all-projects emits an array."""
+PRESET = {
+    "name": "snyk", "kind": "records",
+    "sniff": {"any": [{"path": "packageManager", "exists": True},
+                      {"path": "[0].packageManager", "exists": True}]},
+    "rows_path": ["vulnerabilities", "[].vulnerabilities"],
+    "fields": ["id", "packageName", "version", "severity", "cvssScore",
+               "exploitMaturity", "title", "fixedIn"],
+    "field_max_chars": 240,
+    "identity": ["id", "packageName", "version"],
+    "rank": {"path": "severity",
+             "order": ["critical", "high", "medium", "low"],
+             "default": 3},
+    "score": {"path": "cvssScore", "desc": True},
+    "alert": [{"path": "exploitMaturity", "in": ["mature", "functional"]},
+              {"path": "cvssScore", "gte": 9.0},
+              {"rank_tier": 0}],
+    "group_by": "packageName",
+    "max_bytes": 12288,
+}

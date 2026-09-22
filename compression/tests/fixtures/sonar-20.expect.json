@@ -1,0 +1,28 @@
+{
+ "alert_identities": [
+  [
+   "AY00000-9552"
+  ],
+  [
+   "AY00001-7874"
+  ],
+  [
+   "AY00002-4440"
+  ],
+  [
+   "AY00019-7364"
+  ]
+ ],
+ "by_tier": {
+  "blocker": 2,
+  "critical": 2,
+  "major": 8,
+  "minor": 8
+ },
+ "planted": [
+  "AY00019-7364"
+ ],
+ "preset": "sonarqube",
+ "raw_total": 20,
+ "total": 20
+}

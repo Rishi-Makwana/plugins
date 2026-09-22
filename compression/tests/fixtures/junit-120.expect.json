@@ -1,0 +1,27 @@
+{
+ "alert_identities": [
+  [
+   "pkg.Class7",
+   "test_007"
+  ],
+  [
+   "pkg.Class0",
+   "test_063"
+  ],
+  [
+   "pkg.Class2",
+   "test_119"
+  ]
+ ],
+ "by_tier": {
+  "error": 1,
+  "failure": 2,
+  "passed": 117
+ },
+ "planted": [
+  "test_119"
+ ],
+ "preset": "junit",
+ "raw_total": 120,
+ "total": 120
+}

@@ -1,0 +1,72 @@
+{
+ "alert_identities": [
+  [
+   "SNYK-JS-MINIMI-1002",
+   "minimist",
+   "3.2.2"
+  ],
+  [
+   "SNYK-JS-EXPRES-1003",
+   "express",
+   "4.3.3"
+  ],
+  [
+   "SNYK-JS-NODE-F-1035",
+   "node-fetch",
+   "4.17.0"
+  ],
+  [
+   "SNYK-JS-JQUERY-1086",
+   "jquery",
+   "3.14.2"
+  ],
+  [
+   "SNYK-JS-YARGS-1089",
+   "yargs",
+   "2.17.5"
+  ],
+  [
+   "SNYK-JS-UNDERS-1118",
+   "underscore",
+   "3.10.6"
+  ],
+  [
+   "SNYK-JS-HANDLE-1125",
+   "handlebars",
+   "2.17.6"
+  ],
+  [
+   "SNYK-JS-JQUERY-1146",
+   "jquery",
+   "3.2.6"
+  ],
+  [
+   "SNYK-JS-HANDLE-1165",
+   "handlebars",
+   "2.3.4"
+  ],
+  [
+   "SNYK-JS-JQUERY-1166",
+   "jquery",
+   "3.4.5"
+  ],
+  [
+   "SNYK-JS-ASYNC-1177",
+   "async",
+   "2.15.2"
+  ]
+ ],
+ "by_tier": {
+  "critical": 2,
+  "high": 9,
+  "low": 129,
+  "medium": 60
+ },
+ "planted": [
+  "SNYK-JS-UNDERS-1118",
+  "SNYK-JS-ASYNC-1177"
+ ],
+ "preset": "snyk",
+ "raw_total": 214,
+ "total": 200
+}

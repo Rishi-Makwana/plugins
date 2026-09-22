@@ -1,0 +1,17 @@
+{
+ "alert_identities": [
+  [
+   "SNYK-JS-LODASH-1000",
+   "lodash",
+   "1.0.0"
+  ]
+ ],
+ "by_tier": {
+  "critical": 1,
+  "medium": 39
+ },
+ "preset": "snyk",
+ "raw_total": 40,
+ "search_token": "zylophonic-marmoset-7734",
+ "total": 40
+}

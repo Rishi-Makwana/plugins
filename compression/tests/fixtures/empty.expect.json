@@ -1,0 +1,8 @@
+{
+ "alert_identities": [],
+ "by_tier": {},
+ "loss_reason": "empty",
+ "preset": "snyk",
+ "raw_total": 0,
+ "total": 0
+}
