@@ -1,0 +1,30 @@
+{
+ "alert_identities": [
+  [
+   "py/regular-deserialisation-1",
+   "src/d/module_9.py",
+   61
+  ],
+  [
+   "py/escalation-service-21",
+   "src/b/module_9.py",
+   131
+  ],
+  [
+   "py/deserialisation-privilege-6",
+   "src/d/module_5.py",
+   141
+  ]
+ ],
+ "by_tier": {
+  "error": 3,
+  "note": 97,
+  "warning": 40
+ },
+ "planted": [
+  "py/deserialisation-privilege-6"
+ ],
+ "preset": "sarif",
+ "raw_total": 140,
+ "total": 140
+}

@@ -1,0 +1,20 @@
+{
+ "alert_identities": [
+  [
+   100
+  ],
+  [
+   105
+  ]
+ ],
+ "by_tier": {
+  "critical": 2,
+  "high": 4
+ },
+ "planted": [
+  105
+ ],
+ "preset": "dependabot",
+ "raw_total": 6,
+ "total": 6
+}

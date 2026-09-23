@@ -1,0 +1,29 @@
+{
+ "alert_identities": [
+  [
+   "tests/test_mod_0.py::test_case_12"
+  ],
+  [
+   "tests/test_mod_6.py::test_case_150"
+  ],
+  [
+   "tests/test_mod_10.py::test_case_298"
+  ],
+  [
+   "tests/test_mod_11.py::test_case_299"
+  ]
+ ],
+ "by_tier": {
+  "failed": 4,
+  "passed": 296
+ },
+ "planted": [
+  "tests/test_mod_0.py::test_case_12",
+  "tests/test_mod_6.py::test_case_150",
+  "tests/test_mod_10.py::test_case_298",
+  "tests/test_mod_11.py::test_case_299"
+ ],
+ "preset": "pytest_json",
+ "raw_total": 300,
+ "total": 300
+}

@@ -1,0 +1,22 @@
+{
+ "alert_identities": [
+  [
+   "SNYK-JS-CHALK-1033",
+   "chalk",
+   "2.15.5"
+  ]
+ ],
+ "by_tier": {
+  "critical": 1,
+  "low": 16,
+  "medium": 17
+ },
+ "preset": "snyk",
+ "raw_total": 36,
+ "shared_vuln": [
+  "SNYK-JS-LODASH-1000",
+  "lodash",
+  "1.0.0"
+ ],
+ "total": 34
+}
