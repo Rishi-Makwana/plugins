@@ -159,3 +159,58 @@ def test_restructuredtext_is_prose(tmp_path):
                 "An error here is reported to the caller.", ""]
     code, shape = run(write(tmp_path, "doc.rst", "\n".join(rst)))
     assert shape == "prose" and code == SKIP
+
+
+# -- real-output shapes: found by running actual tool output through it -----
+
+def _pytest_style_junit(n=400, failed=(12, 150, 399)):
+    """pytest --junitxml writes the whole report on ONE line."""
+    cases = []
+    for i in range(n):
+        inner = '<failure message="boom">tb</failure>' if i in failed else ""
+        cases.append(f'<testcase classname="tests.test_mod_{i % 9}" '
+                     f'name="test_case_{i}" time="0.01">{inner}</testcase>')
+    return ('<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests">'
+            f'<testsuite name="pytest" tests="{n}">' + "".join(cases)
+            + "</testsuite></testsuites>")
+
+
+def test_single_line_junit_xml_is_records_not_prose(tmp_path):
+    """A real pytest report is one ~48 KB line. The avg-line-length prose rule
+    used to call it prose and say SKIP, though the renderer handles it well."""
+    code, shape = run(write(tmp_path, "junit.xml", _pytest_style_junit()))
+    assert shape == "json records"
+    assert code == USE
+    proc = subprocess.run([sys.executable, str(CHECK), str(tmp_path / "junit.xml"),
+                           "--json"], capture_output=True, text=True)
+    payload = json.loads(proc.stdout)
+    assert payload["preset"] == "junit" and payload["records"] == 400
+
+
+def test_one_huge_line_that_is_not_xml_is_not_prose(tmp_path):
+    code, shape = run(write(tmp_path, "blob.txt", "k=v;" * 20000))
+    assert shape != "prose"
+
+
+def test_a_known_renderer_preset_is_not_told_to_write_a_preset():
+    """gh_runs ranks by its own order; 'success' is in no generic lexicon."""
+    proc = subprocess.run([sys.executable, str(CHECK), str(FIXTURES / "gh-runs-50.json"),
+                           "--json"], capture_output=True, text=True)
+    payload = json.loads(proc.stdout)
+    assert payload["preset"] == "gh_runs"
+    assert "no rank field" not in payload["shape"]
+    assert "write a preset" not in payload["reason"]
+
+
+def test_hostile_xml_is_rejected_not_expanded():
+    """stdlib only, so no defusedxml: expat (>= 2.4.1) must refuse both."""
+    sys.path.insert(0, str(ROOT))
+    import compress_check as cc
+    lol = ('<?xml version="1.0"?><!DOCTYPE l [<!ENTITY a "aaaaaaaaaa">'
+           + "".join(f'<!ENTITY {chr(98 + i)} "{("&" + chr(97 + i) + ";") * 10}">'
+                     for i in range(9))
+           + ']><testsuite><testcase name="&j;"/></testsuite>')
+    assert cc.junit_records(lol) is None
+    xxe = ('<?xml version="1.0"?><!DOCTYPE x [<!ENTITY e SYSTEM "file:///etc/passwd">]>'
+           '<testsuite><testcase name="&e;"/></testsuite>')
+    assert cc.junit_records(xxe) is None

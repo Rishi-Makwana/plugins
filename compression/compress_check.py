@@ -17,6 +17,7 @@ import json
 import re
 import statistics
 import sys
+import xml.etree.ElementTree as ET
 from collections import Counter
 
 MAX_BYTES = 12288          # renderer's lossless threshold; below this nothing is cut
@@ -63,6 +64,11 @@ DOC_STRUCT_RE = re.compile(r"""^\s{0,3}(?:
 )""", re.X)
 
 USE, SKIP, BORDERLINE, ERROR = 0, 1, 2, 3
+
+# Presets the renderer ships. sniff_preset() also names k8s and gh_api, which
+# the renderer has no preset for.
+RENDERER_PRESETS = {"sarif", "snyk", "sonarqube", "dependabot", "trivy", "gh_runs",
+                    "pytest_json", "junit", "logs"}
 LABEL = {USE: "✔ USE", SKIP: "✘ SKIP", BORDERLINE: "~ BORDERLINE"}
 
 
@@ -159,9 +165,35 @@ def sniff_preset(data):
     if first is not None:
         if "security_advisory" in first:
             return "dependabot"
+        if {"conclusion", "workflowName"} <= first.keys():
+            return "gh_runs"
+        if {"classname", "status"} <= first.keys():
+            return "junit"            # records from junit_records(), below
         if {"number", "title"} <= first.keys():
             return "gh_api"
     return None
+
+
+def junit_records(text):
+    """JUnit XML → one record per <testcase>, or None if it isn't JUnit.
+
+    pytest writes the whole report on a single line, so it must be parsed here:
+    the text heuristics would see one 48 KB line and call it prose.
+    """
+    try:
+        root = ET.fromstring(text)
+    except ET.ParseError:
+        return None
+    records = []
+    suites = [root] if root.tag == "testsuite" else root.iter("testsuite")
+    for suite in suites:
+        for case in suite.iter("testcase"):
+            status = next((c.tag for c in case if c.tag in ("failure", "error", "skipped")),
+                          "passed")
+            records.append({"suite": suite.get("name") or "",
+                            "classname": case.get("classname") or "",
+                            "name": case.get("name") or "", "status": status})
+    return records or None
 
 
 def analyze_json(data, raw_bytes, max_bytes):
@@ -189,7 +221,11 @@ def analyze_json(data, raw_bytes, max_bytes):
     else:
         # no rank field: renderer's autodetect would fall back to top-decile-by-score or nothing
         m["alert_bytes"] = 0
-        m["shape"] = "json records (no rank field found)"
+        # ...unless a renderer preset matched: it ranks by its own order, not
+        # these generic lexicons (gh_runs' "success" is in none of them), so
+        # "write a preset" would be wrong advice.
+        if m["preset"] not in RENDERER_PRESETS:
+            m["shape"] = "json records (no rank field found)"
     return m
 
 
@@ -258,7 +294,9 @@ def analyze_text(text, raw_bytes, max_bytes):
         # (most lines are headings or bullets, not sentences ending in a period),
         # so the prose test below can never fire for one.
         shape = "prose"
-    elif (sentence > 0.5 and repeat < 0.25) or avg > 220:
+    elif (sentence > 0.5 and repeat < 0.25) or (avg > 220 and len(ne) >= 3):
+        # len(ne) >= 3: long lines mean paragraphs only when there are several.
+        # One enormous line is a minified or single-line dump, not prose.
         shape = "prose"
     elif log_struct >= 0.1 or repeat >= 0.3 or (signal + warn) >= 0.01 * len(ne):
         shape = "log lines"
@@ -365,6 +403,8 @@ def main(argv=None):
             data = json.loads(text)
         except Exception:
             data = None
+    elif s[:1] == "<" and "<testsuite" in text:
+        data = junit_records(text)
 
     try:
         m = analyze_json(data, raw_bytes, a.max_bytes) if data is not None else analyze_text(text, raw_bytes, a.max_bytes)
