@@ -1,0 +1,1218 @@
+diff --git a/src/app/custom_commands.rs b/src/app/custom_commands.rs
+index a2245884..1fe31708 100644
+--- a/src/app/custom_commands.rs
++++ b/src/app/custom_commands.rs
+@@ -29,18 +29,45 @@ struct EndpointCommand {
+     id: String,
+     binding: crate::config::CustomCommandKeybind,
+     action: crate::protocol::ClientShellCommandAction,
++    launcher: Option<crate::protocol::ClientShellLauncher>,
+ }
+ 
+ impl EndpointCommandRegistry {
+-    pub(super) fn new(bindings: &[crate::config::CustomCommandKeybind]) -> Self {
++    pub(super) fn new(
++        bindings: &[crate::config::CustomCommandKeybind],
++        launchers: &[crate::config::SidebarLauncherConfig],
++    ) -> Self {
+         let namespace = new_command_namespace();
++        // Fork: sidebar launchers are key-less shell commands, invoked by click.
++        let launcher_bindings = launchers
++            .iter()
++            .filter(|launcher| !launcher.command.trim().is_empty())
++            .map(|launcher| {
++                let binding = crate::config::CustomCommandKeybind {
++                    bindings: crate::config::ActionKeybinds::default(),
++                    label: String::new(),
++                    command: launcher.command.clone(),
++                    action: crate::config::CustomCommandAction::Shell,
++                    description: Some(launcher.label.clone()),
++                    width: None,
++                    height: None,
++                };
++                let launcher = crate::protocol::ClientShellLauncher {
++                    icon: launcher.icon.clone(),
++                    label: launcher.label.clone(),
++                };
++                (binding, Some(launcher))
++            });
+         let entries = bindings
+             .iter()
++            .map(|binding| (binding.clone(), None))
++            .chain(launcher_bindings)
+             .enumerate()
+-            .map(|(index, binding)| EndpointCommand {
++            .map(|(index, (binding, launcher))| EndpointCommand {
+                 action: binding.action.into(),
+                 id: format!("cmd_{namespace}_{index}"),
+-                binding: binding.clone(),
++                binding,
++                launcher,
+             })
+             .collect();
+         Self { entries }
+@@ -62,6 +89,7 @@ impl App {
+                 binding_labels: entry.binding.bindings.labels(),
+                 action: entry.action,
+                 description: entry.binding.description.clone(),
++                launcher: entry.launcher.clone(),
+             })
+             .collect()
+     }
+@@ -594,7 +622,7 @@ mod tests {
+     }
+ 
+     fn install(app: &mut crate::app::App, binding: crate::config::CustomCommandKeybind) {
+-        app.endpoint_commands = super::EndpointCommandRegistry::new(&[binding]);
++        app.endpoint_commands = super::EndpointCommandRegistry::new(&[binding], &[]);
+     }
+ 
+     #[test]
+@@ -779,4 +807,44 @@ mod tests {
+         );
+         assert!(!format!("{manifest:?}").contains("secret-command"));
+     }
++
++    #[test]
++    fn sidebar_launchers_register_as_keyless_shell_commands() {
++        let mut app = test_app();
++        let launcher = crate::config::SidebarLauncherConfig {
++            icon: "C".into(),
++            label: "Chrome".into(),
++            command: "open -a 'Google Chrome'".into(),
++        };
++        let empty = crate::config::SidebarLauncherConfig {
++            icon: "X".into(),
++            label: "Empty".into(),
++            command: "  ".into(),
++        };
++        app.endpoint_commands = super::EndpointCommandRegistry::new(
++            &[binding(crate::config::CustomCommandAction::Shell)],
++            &[launcher, empty],
++        );
++
++        let manifest = app.client_shell_command_manifest();
++        assert_eq!(manifest.len(), 2, "blank launcher commands are skipped");
++        assert!(manifest[0].launcher.is_none());
++        let entry = &manifest[1];
++        assert_eq!(
++            entry.launcher,
++            Some(crate::protocol::ClientShellLauncher {
++                icon: "C".into(),
++                label: "Chrome".into(),
++            })
++        );
++        assert!(entry.binding_labels.is_empty());
++        assert_eq!(
++            entry.action,
++            crate::protocol::ClientShellCommandAction::Shell
++        );
++        let resolved = app
++            .resolve_client_shell_command(&entry.command_id)
++            .expect("launcher resolves by id");
++        assert_eq!(resolved.command, "open -a 'Google Chrome'");
++    }
+ }
+diff --git a/src/app/mod.rs b/src/app/mod.rs
+index 03e89026..7f06af3d 100644
+--- a/src/app/mod.rs
++++ b/src/app/mod.rs
+@@ -490,6 +490,7 @@ impl App {
+             agent_view_override: None,
+             sidebar_agents: config.ui.sidebar.agents.clone(),
+             sidebar_spaces: config.ui.sidebar.spaces.clone(),
++            sidebar_launchers: config.ui.sidebar.launchers.clone(),
+             next_agent_state_change_seq: 0,
+             confirm_close: config.ui.confirm_close,
+             pane_borders: config.ui.pane_borders,
+@@ -499,6 +500,7 @@ impl App {
+             show_agent_labels_on_pane_borders: config.ui.show_agent_labels_on_pane_borders,
+             tab_bar_right: Vec::new(),
+             tab_bar_right_separator: String::new(),
++            sidebar_custom_lines: Vec::new(),
+             reveal_hidden_cursor_for_cjk_ime: config.experimental.reveal_hidden_cursor_for_cjk_ime,
+             cjk_ime_agent_filter_configured: !config.experimental.cjk_ime_agents.is_empty(),
+             cjk_ime_agents: parse_cjk_ime_agents(&config.experimental.cjk_ime_agents),
+@@ -567,8 +569,10 @@ impl App {
+                 .and_then(|ws| ws.focused_pane_id().map(|pane_id| (idx, pane_id)))
+         });
+         let client_shell_keybindings_profile = config.local_keybindings_profile_toml().ok();
+-        let endpoint_commands =
+-            custom_commands::EndpointCommandRegistry::new(&state.keybinds.custom_commands);
++        let endpoint_commands = custom_commands::EndpointCommandRegistry::new(
++            &state.keybinds.custom_commands,
++            &state.sidebar_launchers,
++        );
+ 
+         let mut app = Self {
+             config_diagnostic_deadline: None,
+@@ -634,6 +638,7 @@ impl App {
+             endpoint_commands,
+         };
+         app.configure_tab_bar_status(&config.ui.tab_bar_right, &config.ui.tab_bar_right_separator);
++        app.configure_sidebar_custom(&config.ui.sidebar.custom);
+         app.configure_window_title(&config.ui.window_title);
+         app
+     }
+@@ -786,8 +791,10 @@ impl App {
+                 }
+             }
+         };
+-        self.endpoint_commands =
+-            custom_commands::EndpointCommandRegistry::new(&self.state.keybinds.custom_commands);
++        self.endpoint_commands = custom_commands::EndpointCommandRegistry::new(
++            &self.state.keybinds.custom_commands,
++            &self.state.sidebar_launchers,
++        );
+         self.sync_toast_deadline(previous_toast);
+         report
+     }
+@@ -855,11 +862,13 @@ impl App {
+                     &config.ui.tab_bar_right,
+                     &config.ui.tab_bar_right_separator,
+                 );
++                self.configure_sidebar_custom(&config.ui.sidebar.custom);
+                 self.configure_window_title(&config.ui.window_title);
+                 self.state.agent_panel_sort =
+                     agent_panel_sort_from_config(config.ui.agent_panel_sort);
+                 self.state.sidebar_agents = config.ui.sidebar.agents.clone();
+                 self.state.sidebar_spaces = config.ui.sidebar.spaces.clone();
++                self.state.sidebar_launchers = config.ui.sidebar.launchers.clone();
+                 self.state.sound = config.ui.sound.clone();
+                 self.state.toast_config = config.ui.toast.clone();
+             }
+diff --git a/src/app/state.rs b/src/app/state.rs
+index 892ec5e9..2d094d21 100644
+--- a/src/app/state.rs
++++ b/src/app/state.rs
+@@ -829,6 +829,8 @@ pub struct AppState {
+     pub agent_view_override: Option<crate::api::schema::AgentViewSetParams>,
+     pub sidebar_agents: crate::config::AgentsSidebarConfig,
+     pub sidebar_spaces: crate::config::SpacesSidebarConfig,
++    /// Fork: sidebar launcher buttons, registered as key-less endpoint commands.
++    pub sidebar_launchers: Vec<crate::config::SidebarLauncherConfig>,
+     pub next_agent_state_change_seq: u64,
+     pub confirm_close: bool,
+     pub pane_borders: crate::config::PaneBordersConfig,
+@@ -838,6 +840,8 @@ pub struct AppState {
+     pub show_agent_labels_on_pane_borders: bool,
+     pub tab_bar_right: Vec<TabBarStatusSegment>,
+     pub tab_bar_right_separator: String,
++    /// Fork: latest output lines of `ui.sidebar.custom.command`.
++    pub sidebar_custom_lines: Vec<String>,
+     /// Expose the focused pane's cursor anchor to the outer terminal even when
+     /// the pane requested `?25l`. See `[experimental] reveal_hidden_cursor_for_cjk_ime`.
+     pub reveal_hidden_cursor_for_cjk_ime: bool,
+@@ -1056,6 +1060,7 @@ impl AppState {
+             agent_view_override: None,
+             sidebar_agents: crate::config::AgentsSidebarConfig::default(),
+             sidebar_spaces: crate::config::SpacesSidebarConfig::default(),
++            sidebar_launchers: Vec::new(),
+             next_agent_state_change_seq: 0,
+             confirm_close: true,
+             pane_borders: crate::config::PaneBordersConfig::Auto,
+@@ -1065,6 +1070,7 @@ impl AppState {
+             show_agent_labels_on_pane_borders: false,
+             tab_bar_right: Vec::new(),
+             tab_bar_right_separator: " ".into(),
++            sidebar_custom_lines: Vec::new(),
+             reveal_hidden_cursor_for_cjk_ime: false,
+             cjk_ime_agent_filter_configured: false,
+             cjk_ime_agents: Vec::new(),
+diff --git a/src/app/tab_bar_status.rs b/src/app/tab_bar_status.rs
+index 596c2117..54554a17 100644
+--- a/src/app/tab_bar_status.rs
++++ b/src/app/tab_bar_status.rs
+@@ -15,6 +15,10 @@ use crate::config::TabBarRightEntryConfig;
+ const DATETIME_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+ const MAX_COMMAND_LINE_BYTES: usize = 4096;
+ const MAX_STATUS_TEXT_CHARS: usize = 80;
++/// Fork: marks the sidebar custom command among the tab bar command runtimes.
++const SIDEBAR_CUSTOM_SEGMENT: usize = usize::MAX;
++const MAX_SIDEBAR_CUSTOM_LINES: usize = 50;
++const MAX_SIDEBAR_CUSTOM_OUTPUT_BYTES: usize = 16 * 1024;
+ 
+ pub(super) struct TabBarDatetimeRuntime {
+     segment_index: usize,
+@@ -28,6 +32,7 @@ pub(super) struct TabBarCommandRuntime {
+     timeout: Duration,
+     next_run_at: std::time::Instant,
+     task: Option<StatusCommandTask>,
++    multiline: bool,
+ }
+ 
+ impl Drop for TabBarCommandRuntime {
+@@ -113,6 +118,7 @@ impl App {
+                         timeout: Duration::from_secs(*timeout_seconds),
+                         next_run_at: now,
+                         task: None,
++                        multiline: false,
+                     });
+                 }
+             }
+@@ -122,6 +128,30 @@ impl App {
+             (!self.tab_bar_datetimes.is_empty()).then_some(now + DATETIME_REFRESH_INTERVAL);
+     }
+ 
++    /// Fork: runs `ui.sidebar.custom.command` on the tab bar command runner.
++    /// Call after `configure_tab_bar_status`, which clears all command runtimes.
++    pub(super) fn configure_sidebar_custom(&mut self, config: &crate::config::CustomSidebarConfig) {
++        self.state.sidebar_custom_lines.clear();
++        if !crate::platform::status_commands_supported()
++            || config.command.trim().is_empty()
++            || config.interval_seconds == 0
++            || config.interval_seconds > crate::config::MAX_TAB_BAR_COMMAND_INTERVAL_SECONDS
++            || config.timeout_seconds == 0
++            || config.timeout_seconds > crate::config::MAX_TAB_BAR_COMMAND_TIMEOUT_SECONDS
++        {
++            return;
++        }
++        self.tab_bar_commands.push(TabBarCommandRuntime {
++            segment_index: SIDEBAR_CUSTOM_SEGMENT,
++            command: config.command.clone(),
++            interval: Duration::from_secs(config.interval_seconds),
++            timeout: Duration::from_secs(config.timeout_seconds),
++            next_run_at: std::time::Instant::now(),
++            task: None,
++            multiline: true,
++        });
++    }
++
+     pub(crate) fn handle_tab_bar_status_tasks(&mut self, now: std::time::Instant) -> bool {
+         let mut changed = false;
+ 
+@@ -164,6 +194,7 @@ impl App {
+                 runtime.timeout,
+                 environment.clone(),
+                 cwd.clone(),
++                runtime.multiline,
+             ));
+         }
+ 
+@@ -204,6 +235,14 @@ impl App {
+                 None
+             }
+         };
++        if segment_index == SIDEBAR_CUSTOM_SEGMENT {
++            let lines: Vec<String> = output
++                .map(|output| output.split('\n').map(str::to_owned).collect())
++                .unwrap_or_default();
++            let changed = self.state.sidebar_custom_lines != lines;
++            self.state.sidebar_custom_lines = lines;
++            return changed;
++        }
+         let Some(TabBarStatusSegment::Text(current)) =
+             self.state.tab_bar_right.get_mut(segment_index)
+         else {
+@@ -282,6 +321,26 @@ fn command_output_text(output: &[u8]) -> Option<String> {
+     output.lines().next_back().and_then(sanitize_status_text)
+ }
+ 
++/// Unlike tab bar text, keeps every line and its leading indentation.
++fn command_output_lines(output: &[u8]) -> Option<String> {
++    let output = strip_terminal_control_sequences(output);
++    let output = String::from_utf8_lossy(&output);
++    let lines: Vec<String> = output
++        .lines()
++        .take(MAX_SIDEBAR_CUSTOM_LINES)
++        .map(|line| {
++            line.trim_end()
++                .chars()
++                .filter(|character| {
++                    !character.is_control() && !is_unicode_format_control(*character)
++                })
++                .take(MAX_STATUS_TEXT_CHARS)
++                .collect()
++        })
++        .collect();
++    (!lines.is_empty()).then(|| lines.join("\n"))
++}
++
+ #[derive(Clone, Copy)]
+ enum ControlSequenceState {
+     Text,
+@@ -379,6 +438,20 @@ async fn read_last_output_line(
+     })
+ }
+ 
++/// Keeps the first bytes and drains the rest so the child never blocks on a full pipe.
++async fn read_capped_output(mut stdout: tokio::process::ChildStdout) -> std::io::Result<Vec<u8>> {
++    let mut output = Vec::new();
++    let mut buffer = [0_u8; 1024];
++    loop {
++        let count = stdout.read(&mut buffer).await?;
++        if count == 0 {
++            return Ok(output);
++        }
++        let room = MAX_SIDEBAR_CUSTOM_OUTPUT_BYTES.saturating_sub(output.len());
++        output.extend_from_slice(&buffer[..count.min(room)]);
++    }
++}
++
+ struct StatusCommandTask {
+     abort_handle: tokio::task::AbortHandle,
+     control: Arc<StatusCommandControl>,
+@@ -427,6 +500,7 @@ fn spawn_status_command(
+     timeout: Duration,
+     environment: Vec<(String, String)>,
+     cwd: Option<std::path::PathBuf>,
++    multiline: bool,
+ ) -> StatusCommandTask {
+     let control = Arc::new(StatusCommandControl {
+         terminated: AtomicBool::new(false),
+@@ -442,6 +516,7 @@ fn spawn_status_command(
+             deadline,
+             environment,
+             cwd,
++            multiline,
+         )
+         .await;
+         task_control.terminate();
+@@ -466,6 +541,7 @@ async fn run_status_command(
+     deadline: tokio::time::Instant,
+     environment: Vec<(String, String)>,
+     cwd: Option<std::path::PathBuf>,
++    multiline: bool,
+ ) -> Result<Option<String>, String> {
+     if control.is_terminated() || tokio::time::Instant::now() >= deadline {
+         return Err(format!("timed out after {}s", timeout.as_secs()));
+@@ -498,12 +574,18 @@ async fn run_status_command(
+             let Some(stdout) = stdout else {
+                 return std::io::Result::Ok(Vec::new());
+             };
+-            read_last_output_line(stdout).await
++            if multiline {
++                read_capped_output(stdout).await
++            } else {
++                read_last_output_line(stdout).await
++            }
+         };
+         let (status, output) = tokio::join!(child.wait(), read_output);
+         let status = status.map_err(|error| error.to_string())?;
+         let output = output.map_err(|error| error.to_string())?;
+-        if status.success() {
++        if status.success() && multiline {
++            Ok(command_output_lines(&output))
++        } else if status.success() {
+             Ok(command_output_text(&output))
+         } else {
+             Err(format!("exited with {status}"))
+@@ -562,6 +644,7 @@ mod tests {
+             Duration::from_secs(2),
+             Vec::new(),
+             None,
++            false,
+         );
+ 
+         let event = tokio::time::timeout(Duration::from_secs(3), event_rx.recv())
+@@ -592,6 +675,7 @@ mod tests {
+             Duration::from_secs(1),
+             Vec::new(),
+             None,
++            false,
+         );
+ 
+         std::thread::sleep(Duration::from_millis(1100));
+@@ -623,6 +707,7 @@ mod tests {
+             Duration::from_secs(2),
+             Vec::new(),
+             None,
++            false,
+         );
+ 
+         let event = tokio::time::timeout(Duration::from_secs(3), event_rx.recv())
+@@ -823,4 +908,56 @@ mod tests {
+     fn separator_preserves_printable_spacing_and_drops_controls() {
+         assert_eq!(sanitize_separator(" \x1b|\n "), " | ");
+     }
++
++    #[cfg(unix)]
++    #[tokio::test]
++    async fn sidebar_custom_command_keeps_every_line_and_indentation() {
++        let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(1);
++        spawn_status_command(
++            event_tx,
++            7,
++            SIDEBAR_CUSTOM_SEGMENT,
++            "printf 'cpu 12%%\\n  load 0.4\\n\\033[31mred\\033[0m  \\n'".into(),
++            Duration::from_secs(2),
++            Vec::new(),
++            None,
++            true,
++        );
++        let event = tokio::time::timeout(Duration::from_secs(3), event_rx.recv())
++            .await
++            .expect("sidebar command timed out")
++            .expect("sidebar command event channel closed");
++        let AppEvent::TabBarCommandFinished {
++            segment_index,
++            result: Ok(Some(output)),
++            ..
++        } = event
++        else {
++            panic!("sidebar command should succeed");
++        };
++        assert_eq!(segment_index, SIDEBAR_CUSTOM_SEGMENT);
++        assert_eq!(output, "cpu 12%\n  load 0.4\nred");
++    }
++
++    #[test]
++    fn sidebar_custom_result_replaces_state_lines_and_failure_clears_them() {
++        let mut app = test_app();
++        app.configure_sidebar_custom(&crate::config::CustomSidebarConfig {
++            command: "stats".into(),
++            ..Default::default()
++        });
++        let generation = app.tab_bar_status_generation;
++        assert!(app.handle_tab_bar_command_finished(
++            generation,
++            SIDEBAR_CUSTOM_SEGMENT,
++            Ok(Some("a\nb".into())),
++        ));
++        assert_eq!(app.state.sidebar_custom_lines, vec!["a", "b"]);
++        assert!(app.handle_tab_bar_command_finished(
++            generation,
++            SIDEBAR_CUSTOM_SEGMENT,
++            Err("exited with 1".into()),
++        ));
++        assert!(app.state.sidebar_custom_lines.is_empty());
++    }
+ }
+diff --git a/src/client/endpoint/activation_tests.rs b/src/client/endpoint/activation_tests.rs
+index 7201940a..84939e6a 100644
+--- a/src/client/endpoint/activation_tests.rs
++++ b/src/client/endpoint/activation_tests.rs
+@@ -60,6 +60,7 @@ fn test_snapshot(boot_id: &str, revision: u64) -> crate::protocol::ClientShellSn
+         focused_pane_id: None,
+         tab_bar_right: Vec::new(),
+         tab_bar_right_separator: String::new(),
++        sidebar_custom_lines: Vec::new(),
+         agent_view_label: None,
+         agent_order: Vec::new(),
+         workspaces: Vec::new(),
+@@ -426,6 +427,7 @@ fn activation_requires_an_exact_snapshot_surface_revision_pair() {
+         focused_pane_id: None,
+         tab_bar_right: Vec::new(),
+         tab_bar_right_separator: String::new(),
++        sidebar_custom_lines: Vec::new(),
+         agent_view_label: None,
+         agent_order: Vec::new(),
+         workspaces: Vec::new(),
+diff --git a/src/client/shell/config.rs b/src/client/shell/config.rs
+index 2d16b00f..01a048f3 100644
+--- a/src/client/shell/config.rs
++++ b/src/client/shell/config.rs
+@@ -123,6 +123,7 @@ impl ClientShellConfig {
+             hide_tab_bar_when_single_tab: config.ui.hide_tab_bar_when_single_tab,
+             spaces: config.ui.sidebar.spaces.clone(),
+             agents: config.ui.sidebar.agents.clone(),
++            custom: config.ui.sidebar.custom.clone(),
+             agent_panel_sort: config.ui.agent_panel_sort,
+             status_indicators: config.ui.status_indicators,
+             sound_enabled: config.ui.sound.enabled,
+diff --git a/src/client/shell/mouse.rs b/src/client/shell/mouse.rs
+index f2df2941..d87e2a81 100644
+--- a/src/client/shell/mouse.rs
++++ b/src/client/shell/mouse.rs
+@@ -22,7 +22,11 @@ impl ClientShellState {
+     }
+ 
+     fn set_sidebar_section_from_row(&mut self, row: u16, outcome: &mut ClientShellInput) {
+-        let divider = self.hits.sidebar_divider;
++        let divider = if self.hits.sidebar_split_area.height > 0 {
++            self.hits.sidebar_split_area
++        } else {
++            self.hits.sidebar_divider
++        };
+         if divider.height == 0 {
+             return;
+         }
+@@ -2130,6 +2134,28 @@ impl ClientShellState {
+                     );
+                     return;
+                 }
++                let launcher_command_id = self
++                    .hits
++                    .launchers
++                    .iter()
++                    .find(|(rect, _)| super::contains(*rect, point))
++                    .map(|(_, command_id)| command_id.clone());
++                if let (Some(command_id), Some(snapshot)) =
++                    (launcher_command_id, self.snapshot.as_deref())
++                {
++                    let params = crate::api::schema::CommandInvokeParams {
++                        command_id,
++                        workspace_id: snapshot.focused_workspace_id.clone(),
++                        tab_id: snapshot.focused_tab_id.clone(),
++                        pane_id: snapshot.focused_pane_id.clone(),
++                        selection: None,
++                    };
++                    self.push_endpoint_method(
++                        crate::api::schema::Method::CommandInvoke(params),
++                        outcome,
++                    );
++                    return;
++                }
+                 let scrollbar_hit = self
+                     .hits
+                     .panes
+diff --git a/src/client/shell/sidebar.rs b/src/client/shell/sidebar.rs
+index f94f6bdc..2b5d9a10 100644
+--- a/src/client/shell/sidebar.rs
++++ b/src/client/shell/sidebar.rs
+@@ -211,10 +211,20 @@ pub(crate) fn render_sidebar(
+     } else {
+         Rect::new(area.right().saturating_sub(1), area.y, 1, area.height)
+     };
++    // Fork: stats and launchers take the bottom first, so spaces and agents
++    // split the remaining height evenly.
++    let content = Rect::new(area.x, area.y, area.width.saturating_sub(1), area.height);
++    let (content, launcher_area) = split_launcher_section(content, snapshot);
++    let (content, custom_area) = split_custom_section(content, snapshot, config);
++    let split_area = Rect {
++        height: content.height,
++        ..area
++    };
++    hits.sidebar_split_area = split_area;
+     let (workspace_area, detail_area) =
+-        crate::ui::expanded_sidebar_sections(area, state.sidebar_section_split);
++        crate::ui::expanded_sidebar_sections(split_area, state.sidebar_section_split);
+     hits.sidebar_section_divider =
+-        crate::ui::sidebar_section_divider_rect(area, state.sidebar_section_split);
++        crate::ui::sidebar_section_divider_rect(split_area, state.sidebar_section_split);
+     put_text(
+         buffer,
+         workspace_area.x,
+@@ -438,6 +448,8 @@ pub(crate) fn render_sidebar(
+         state.agent_scroll,
+         hits,
+     );
++    render_custom_section(buffer, custom_area, snapshot, config);
++    render_launcher_section(buffer, launcher_area, snapshot, config, hits);
+ 
+     hits.sidebar_toggle = Rect::new(
+         area.right().saturating_sub(2),
+@@ -749,3 +761,175 @@ pub(in crate::client::shell) fn render_workspace_rows(
+         }
+     }
+ }
++
++/// Fork: rows kept for spaces and agents before stats or launchers are shown.
++const MIN_SPACES_AND_AGENTS_ROWS: u16 = 12;
++/// Fork: divider line plus title row.
++const CUSTOM_SECTION_HEADER_ROWS: u16 = 2;
++
++/// Fork: carves the custom section off the bottom of the sidebar content.
++fn split_custom_section(
++    area: Rect,
++    snapshot: &ClientShellSnapshot,
++    config: &ClientShellConfig,
++) -> (Rect, Rect) {
++    if config.custom.command.trim().is_empty() {
++        return (area, Rect::default());
++    }
++    let line_rows = snapshot
++        .sidebar_custom_lines
++        .len()
++        .min(usize::from(config.custom.max_rows)) as u16;
++    let height = (CUSTOM_SECTION_HEADER_ROWS + line_rows)
++        .min(area.height.saturating_sub(MIN_SPACES_AND_AGENTS_ROWS));
++    if height < CUSTOM_SECTION_HEADER_ROWS {
++        return (area, Rect::default());
++    }
++    let agents = Rect {
++        height: area.height - height,
++        ..area
++    };
++    let custom = Rect::new(area.x, agents.bottom(), area.width, height);
++    (agents, custom)
++}
++
++fn render_custom_section(
++    buffer: &mut Buffer,
++    area: Rect,
++    snapshot: &ClientShellSnapshot,
++    config: &ClientShellConfig,
++) {
++    if area.height < CUSTOM_SECTION_HEADER_ROWS {
++        return;
++    }
++    let palette = &config.palette;
++    put_text(
++        buffer,
++        area.x,
++        area.y,
++        area.width,
++        &"─".repeat(area.width as usize),
++        Style::default().fg(palette.surface_dim),
++    );
++    put_text(
++        buffer,
++        area.x,
++        area.y + 1,
++        area.width,
++        &format!(" {}", config.custom.title),
++        Style::default()
++            .fg(palette.overlay0)
++            .add_modifier(Modifier::BOLD),
++    );
++    // Leave the last two columns for the « collapse toggle on the bottom row.
++    let line_width = area.width.saturating_sub(3);
++    for (row, line) in snapshot
++        .sidebar_custom_lines
++        .iter()
++        .take(usize::from(area.height - CUSTOM_SECTION_HEADER_ROWS))
++        .enumerate()
++    {
++        put_text(
++            buffer,
++            area.x + 1,
++            area.y + CUSTOM_SECTION_HEADER_ROWS + row as u16,
++            line_width,
++            line,
++            Style::default().fg(palette.text),
++        );
++    }
++}
++
++const LAUNCHER_COLUMNS: u16 = 3;
++/// Icon row plus label row.
++const LAUNCHER_TILE_ROWS: u16 = 2;
++
++fn launchers(
++    snapshot: &ClientShellSnapshot,
++) -> impl Iterator<Item = (&str, &crate::protocol::ClientShellLauncher)> {
++    snapshot.commands.iter().filter_map(|command| {
++        let launcher = command.launcher.as_ref()?;
++        Some((command.command_id.as_str(), launcher))
++    })
++}
++
++/// Fork: carves the launcher grid off the bottom of the sidebar content.
++fn split_launcher_section(area: Rect, snapshot: &ClientShellSnapshot) -> (Rect, Rect) {
++    let count = launchers(snapshot).count() as u16;
++    if count == 0 {
++        return (area, Rect::default());
++    }
++    let grid_rows = count.div_ceil(LAUNCHER_COLUMNS);
++    let height = (CUSTOM_SECTION_HEADER_ROWS + grid_rows * LAUNCHER_TILE_ROWS)
++        .min(area.height.saturating_sub(MIN_SPACES_AND_AGENTS_ROWS));
++    if height < CUSTOM_SECTION_HEADER_ROWS + LAUNCHER_TILE_ROWS {
++        return (area, Rect::default());
++    }
++    let agents = Rect {
++        height: area.height - height,
++        ..area
++    };
++    (
++        agents,
++        Rect::new(area.x, agents.bottom(), area.width, height),
++    )
++}
++
++fn render_launcher_section(
++    buffer: &mut Buffer,
++    area: Rect,
++    snapshot: &ClientShellSnapshot,
++    config: &ClientShellConfig,
++    hits: &mut ShellHitMap,
++) {
++    if area.height < CUSTOM_SECTION_HEADER_ROWS + LAUNCHER_TILE_ROWS {
++        return;
++    }
++    let palette = &config.palette;
++    put_text(
++        buffer,
++        area.x,
++        area.y,
++        area.width,
++        &"─".repeat(area.width as usize),
++        Style::default().fg(palette.surface_dim),
++    );
++    put_text(
++        buffer,
++        area.x,
++        area.y + 1,
++        area.width,
++        " launch",
++        Style::default()
++            .fg(palette.overlay0)
++            .add_modifier(Modifier::BOLD),
++    );
++    // Leave the last two columns for the « collapse toggle on the bottom row.
++    let grid_width = area.width.saturating_sub(2);
++    let tile_width = grid_width / LAUNCHER_COLUMNS;
++    if tile_width == 0 {
++        return;
++    }
++    let visible_rows = (area.height - CUSTOM_SECTION_HEADER_ROWS) / LAUNCHER_TILE_ROWS;
++    for (index, (command_id, launcher)) in launchers(snapshot)
++        .take(usize::from(visible_rows * LAUNCHER_COLUMNS))
++        .enumerate()
++    {
++        let index = index as u16;
++        let tile = Rect::new(
++            area.x + (index % LAUNCHER_COLUMNS) * tile_width,
++            area.y + CUSTOM_SECTION_HEADER_ROWS + (index / LAUNCHER_COLUMNS) * LAUNCHER_TILE_ROWS,
++            tile_width,
++            LAUNCHER_TILE_ROWS,
++        );
++        put_centered(buffer, tile, tile.y, &launcher.icon, palette.accent);
++        put_centered(buffer, tile, tile.y + 1, &launcher.label, palette.overlay1);
++        hits.launchers.push((tile, command_id.to_owned()));
++    }
++}
++
++fn put_centered(buffer: &mut Buffer, tile: Rect, y: u16, text: &str, color: ratatui::style::Color) {
++    let width = display_width(text).min(tile.width);
++    let x = tile.x + (tile.width - width) / 2;
++    put_text(buffer, x, y, width, text, Style::default().fg(color));
++}
+diff --git a/src/client/shell/state.rs b/src/client/shell/state.rs
+index 0d6937e0..074c2a8d 100644
+--- a/src/client/shell/state.rs
++++ b/src/client/shell/state.rs
+@@ -23,6 +23,7 @@ pub(crate) struct ClientShellConfig {
+     pub(super) hide_tab_bar_when_single_tab: bool,
+     pub(super) spaces: SpacesSidebarConfig,
+     pub(super) agents: crate::config::AgentsSidebarConfig,
++    pub(super) custom: crate::config::CustomSidebarConfig,
+     pub(super) agent_panel_sort: crate::config::AgentPanelSortConfig,
+     pub(super) status_indicators: crate::config::StatusIndicatorStyle,
+     pub(super) sound_enabled: bool,
+@@ -94,6 +95,8 @@ pub(super) struct ShellHitMap {
+     pub(super) popup: Option<PaneHit>,
+     pub(super) pane_splits: Vec<PaneSplitHit>,
+     pub(super) agents: Vec<(Rect, String)>,
++    /// Fork: sidebar launcher tiles and their endpoint command ids.
++    pub(super) launchers: Vec<(Rect, String)>,
+     pub(super) endpoint_agents: Vec<(Rect, ClientEndpointId, String)>,
+     pub(super) agent_body: Rect,
+     pub(super) agent_scrollbar: Rect,
+@@ -102,6 +105,8 @@ pub(super) struct ShellHitMap {
+     pub(super) agent_sort_toggle: Rect,
+     pub(super) sidebar_divider: Rect,
+     pub(super) sidebar_section_divider: Rect,
++    /// Fork: height the spaces/agents divider drag maps onto; empty means the full sidebar.
++    pub(super) sidebar_split_area: Rect,
+     pub(super) sidebar_toggle: Rect,
+     pub(super) new_workspace: Rect,
+     pub(super) new_tab: Rect,
+diff --git a/src/client/shell/tests/agents_worktrees_notifications.rs b/src/client/shell/tests/agents_worktrees_notifications.rs
+index 5b8b1224..16a44ed0 100644
+--- a/src/client/shell/tests/agents_worktrees_notifications.rs
++++ b/src/client/shell/tests/agents_worktrees_notifications.rs
+@@ -1462,3 +1462,189 @@ fn semantic_notifications_use_client_policy_and_stable_navigation_targets() {
+     assert!(state.visible_notification.is_none());
+     assert_eq!(state.pending_notifications.len(), 1);
+ }
++
++#[test]
++fn custom_sidebar_section_renders_command_lines_below_agents() {
++    let mut config = ClientShellConfig::from_config(&Config::default());
++    config.custom.command = "stats".into();
++    config.custom.title = "stats".into();
++    let mut state = ClientShellState::new(config);
++    let mut snapshot = snapshot();
++    snapshot.sidebar_custom_lines = vec!["cpu 12%".into(), "  load 0.4".into()];
++    state.set_snapshot(Box::new(snapshot));
++    state.set_pane_surface(surface());
++    let shell = state.compose(106, 30).expect("custom section frame");
++    let rows: Vec<String> = shell
++        .cells
++        .chunks(106)
++        .map(|row| {
++            row.iter()
++                .take(24)
++                .map(|cell| cell.symbol.as_str())
++                .collect()
++        })
++        .collect();
++    let find = |needle: &str| {
++        rows.iter()
++            .position(|row| row.contains(needle))
++            .unwrap_or_else(|| panic!("{needle:?} missing from sidebar:\n{}", rows.join("\n")))
++    };
++    let agents = find(" agents");
++    let title = find(" stats");
++    assert!(agents < title, "custom section sits below agents");
++    assert!(
++        rows[title - 1].starts_with('─'),
++        "divider above custom title"
++    );
++    assert_eq!(find("cpu 12%"), title + 1);
++    assert_eq!(find("   load 0.4"), title + 2);
++    assert_eq!(title + 2, 29, "custom section ends at the sidebar bottom");
++}
++
++#[test]
++fn custom_sidebar_section_is_hidden_without_a_command() {
++    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
++    let mut snapshot = snapshot();
++    snapshot.sidebar_custom_lines = vec!["cpu 12%".into()];
++    state.set_snapshot(Box::new(snapshot));
++    state.set_pane_surface(surface());
++    let shell = state.compose(106, 30).expect("default frame");
++    let text: String = shell
++        .cells
++        .iter()
++        .map(|cell| cell.symbol.as_str())
++        .collect();
++    assert!(!text.contains("cpu 12%"));
++}
++
++fn launcher_command(id: &str, icon: &str, label: &str) -> crate::protocol::ClientShellCommand {
++    crate::protocol::ClientShellCommand {
++        command_id: id.into(),
++        binding_label: String::new(),
++        binding_labels: Vec::new(),
++        action: crate::protocol::ClientShellCommandAction::Shell,
++        description: Some(label.into()),
++        launcher: Some(crate::protocol::ClientShellLauncher {
++            icon: icon.into(),
++            label: label.into(),
++        }),
++    }
++}
++
++#[test]
++fn launcher_tiles_render_in_a_grid_and_click_invokes_their_command() {
++    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
++    let mut snapshot = snapshot();
++    for (index, label) in ["Chrome", "Confluence", "VS Code", "Slack"]
++        .iter()
++        .enumerate()
++    {
++        snapshot.commands.push(launcher_command(
++            &format!("cmd_launch_{index}"),
++            &label[..1],
++            label,
++        ));
++    }
++    state.set_snapshot(Box::new(snapshot));
++    state.set_pane_surface(surface());
++    let shell = state.compose(106, 30).expect("launcher frame");
++    let rows: Vec<String> = shell
++        .cells
++        .chunks(106)
++        .map(|row| {
++            row.iter()
++                .take(26)
++                .map(|cell| cell.symbol.as_str())
++                .collect()
++        })
++        .collect();
++
++    let tiles = state.hits.launchers.clone();
++    assert_eq!(tiles.len(), 4);
++    assert_eq!(tiles[0].0.y, tiles[2].0.y, "three tiles per row");
++    assert_eq!(
++        tiles[3].0.y,
++        tiles[0].0.y + 2,
++        "fourth tile wraps to the next row"
++    );
++    assert!(tiles[1].0.x > tiles[0].0.x);
++    let first = tiles[0].0;
++    assert!(
++        rows[usize::from(first.y)].contains('C'),
++        "icon row:\n{}",
++        rows.join("\n")
++    );
++    assert!(rows[usize::from(first.y) + 1].contains("Chrome"));
++    assert!(rows[usize::from(first.y) - 1].contains(" launch"));
++    assert_eq!(
++        tiles[3].0.bottom(),
++        30,
++        "launcher grid ends at the sidebar bottom"
++    );
++
++    let (rect, command_id) = &tiles[1];
++    let mut clicked = ClientShellInput::default();
++    for kind in [
++        MouseEventKind::Down(MouseButton::Left),
++        MouseEventKind::Up(MouseButton::Left),
++    ] {
++        let outcome =
++            state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
++                kind,
++                column: rect.x + 1,
++                row: rect.y,
++                modifiers: KeyModifiers::empty(),
++            })]);
++        clicked.actions.extend(outcome.actions);
++    }
++    let [ClientShellAction::Endpoint { request, .. }] = &clicked.actions[..] else {
++        panic!("launcher click should send one endpoint request");
++    };
++    assert!(matches!(
++        &request.method,
++        crate::api::schema::Method::CommandInvoke(params) if &params.command_id == command_id
++    ));
++}
++
++#[test]
++fn spaces_and_agents_split_the_height_left_above_stats_and_launchers() {
++    let mut config = ClientShellConfig::from_config(&Config::default());
++    config.custom.command = "stats".into();
++    let mut state = ClientShellState::new(config);
++    let mut snapshot = snapshot();
++    snapshot.sidebar_custom_lines = vec!["cpu 12%".into(), "mem 58%".into()];
++    for index in 0..4 {
++        snapshot.commands.push(launcher_command(
++            &format!("cmd_launch_{index}"),
++            "C",
++            "Chrome",
++        ));
++    }
++    state.set_snapshot(Box::new(snapshot));
++    state.set_pane_surface(surface());
++    state.compose(106, 30).expect("split frame");
++
++    // Launchers take 2 + 2 * 2 rows and stats 2 + 2 rows, leaving 20 rows split 10/10.
++    assert_eq!(state.hits.sidebar_split_area.height, 20);
++    let divider = state.hits.sidebar_section_divider;
++    assert_eq!(divider.y, 10);
++    assert!(state.hits.launchers.iter().all(|(rect, _)| rect.y >= 24));
++
++    state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
++        kind: MouseEventKind::Down(MouseButton::Left),
++        column: divider.x + 2,
++        row: divider.y,
++        modifiers: KeyModifiers::empty(),
++    })]);
++    state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
++        kind: MouseEventKind::Drag(MouseButton::Left),
++        column: divider.x + 2,
++        row: 5,
++        modifiers: KeyModifiers::empty(),
++    })]);
++    assert!(
++        (state.sidebar_section_split - 0.25).abs() < 0.01,
++        "drag maps onto the spaces/agents area, got {}",
++        state.sidebar_section_split
++    );
++}
+diff --git a/src/client/shell/tests/endpoint_requests.rs b/src/client/shell/tests/endpoint_requests.rs
+index 1f51f06c..ed533147 100644
+--- a/src/client/shell/tests/endpoint_requests.rs
++++ b/src/client/shell/tests/endpoint_requests.rs
+@@ -21,6 +21,7 @@ fn pending_popup() -> (ClientShellState, Vec<ClientShellAction>) {
+             binding_labels: binding.bindings.labels(),
+             action: crate::protocol::ClientShellCommandAction::Popup,
+             description: None,
++            launcher: None,
+         });
+     state.set_snapshot(Box::new(projection));
+     state.set_pane_surface(surface());
+diff --git a/src/client/shell/tests/keybindings_settings.rs b/src/client/shell/tests/keybindings_settings.rs
+index e1b43a01..c9c35b6c 100644
+--- a/src/client/shell/tests/keybindings_settings.rs
++++ b/src/client/shell/tests/keybindings_settings.rs
+@@ -302,6 +302,7 @@ command = "local-only"
+             binding_labels: vec!["prefix+c".into(), "prefix+y".into()],
+             action: crate::protocol::ClientShellCommandAction::Shell,
+             description: Some("loaded endpoint command".into()),
++            launcher: None,
+         });
+     local_state.set_snapshot(Box::new(local_projection));
+     assert_eq!(
+@@ -343,6 +344,7 @@ command = "local-only"
+             binding_labels: vec!["prefix+c".into(), "prefix+y".into()],
+             action: crate::protocol::ClientShellCommandAction::Shell,
+             description: Some("loaded endpoint command".into()),
++            launcher: None,
+         });
+     local_state.mode = ClientShellMode::Prefix;
+     local_state.set_snapshot(Box::new(id_only_projection));
+@@ -374,6 +376,7 @@ new_tab = "prefix+n"
+             binding_labels: vec!["prefix+z".into()],
+             action: crate::protocol::ClientShellCommandAction::Shell,
+             description: Some("remote command".into()),
++            launcher: None,
+         });
+     state.set_snapshot(Box::new(projection));
+ 
+@@ -419,6 +422,7 @@ fn custom_binding_invokes_only_the_endpoint_manifest_id() {
+             binding_labels: binding.bindings.labels(),
+             action: crate::protocol::ClientShellCommandAction::Shell,
+             description: None,
++            launcher: None,
+         });
+     state.set_snapshot(Box::new(projection));
+ 
+@@ -462,6 +466,7 @@ fn plugin_command_carries_client_owned_selection_coordinates() {
+             binding_labels: binding.bindings.labels(),
+             action: crate::protocol::ClientShellCommandAction::PluginAction,
+             description: None,
++            launcher: None,
+         });
+     state.set_snapshot(Box::new(projection));
+     let mut pane_surface = surface();
+@@ -706,6 +711,7 @@ fn help_overlay_restores_released_search_scroll_and_custom_binding_behavior() {
+             binding_labels: vec!["prefix+z".into()],
+             action: crate::protocol::ClientShellCommandAction::PluginAction,
+             description: Some("run plugin action".into()),
++            launcher: None,
+         });
+     state.set_snapshot(Box::new(projection));
+     state.set_pane_surface(surface());
+diff --git a/src/client/shell/tests/mod.rs b/src/client/shell/tests/mod.rs
+index 9d960143..91ae49c4 100644
+--- a/src/client/shell/tests/mod.rs
++++ b/src/client/shell/tests/mod.rs
+@@ -25,6 +25,7 @@ pub(super) fn snapshot() -> ClientShellSnapshot {
+         focused_pane_id: Some("pane_1".into()),
+         tab_bar_right: Vec::new(),
+         tab_bar_right_separator: " ".into(),
++        sidebar_custom_lines: Vec::new(),
+         agent_view_label: None,
+         agent_order: Vec::new(),
+         workspaces: vec![ClientShellWorkspace {
+diff --git a/src/client/shell/tests/popup_focus_projection.rs b/src/client/shell/tests/popup_focus_projection.rs
+index c9f02278..8c856b81 100644
+--- a/src/client/shell/tests/popup_focus_projection.rs
++++ b/src/client/shell/tests/popup_focus_projection.rs
+@@ -566,6 +566,7 @@ fn popup_command_blocks_underlying_input_until_surface_or_error() {
+             binding_labels: binding.bindings.labels(),
+             action: crate::protocol::ClientShellCommandAction::Popup,
+             description: None,
++            launcher: None,
+         });
+     state.set_snapshot(Box::new(projection));
+     state.set_pane_surface(surface());
+diff --git a/src/config.rs b/src/config.rs
+index 60a22a1e..b7ce7c1c 100644
+--- a/src/config.rs
++++ b/src/config.rs
+@@ -29,8 +29,8 @@ pub use self::{
+         UpdateChannelConfig, MAX_TOAST_DELAY_SECONDS,
+     },
+     sidebar::{
+-        AgentSidebarToken, AgentsSidebarConfig, SidebarConfig, SidebarTokenStyle,
+-        SpaceSidebarToken, SpacesSidebarConfig,
++        AgentSidebarToken, AgentsSidebarConfig, CustomSidebarConfig, SidebarConfig,
++        SidebarLauncherConfig, SidebarTokenStyle, SpaceSidebarToken, SpacesSidebarConfig,
+     },
+     sound::SoundConfig,
+     tab_bar::TabBarRightEntryConfig,
+diff --git a/src/config/sidebar.rs b/src/config/sidebar.rs
+index 9a4cb5e0..605a8e6d 100644
+--- a/src/config/sidebar.rs
++++ b/src/config/sidebar.rs
+@@ -475,11 +475,46 @@ impl Default for SpacesSidebarConfig {
+     }
+ }
+ 
++/// Fork: a third sidebar section below agents, filled from a shell command's
++/// output lines. Hidden while `command` is empty.
++#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
++#[serde(default)]
++pub struct CustomSidebarConfig {
++    pub title: String,
++    pub command: String,
++    pub interval_seconds: u64,
++    pub timeout_seconds: u64,
++    pub max_rows: u16,
++}
++
++impl Default for CustomSidebarConfig {
++    fn default() -> Self {
++        Self {
++            title: "custom".into(),
++            command: String::new(),
++            interval_seconds: 5,
++            timeout_seconds: 2,
++            max_rows: 8,
++        }
++    }
++}
++
++/// Fork: a clickable sidebar button that runs `command` like a shell custom command.
++#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize)]
++#[serde(default)]
++pub struct SidebarLauncherConfig {
++    pub icon: String,
++    pub label: String,
++    pub command: String,
++}
++
+ #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize)]
+ #[serde(default)]
+ pub struct SidebarConfig {
+     pub agents: AgentsSidebarConfig,
+     pub spaces: SpacesSidebarConfig,
++    pub custom: CustomSidebarConfig,
++    pub launchers: Vec<SidebarLauncherConfig>,
+ }
+ 
+ #[cfg(test)]
+diff --git a/src/protocol/endpoint.rs b/src/protocol/endpoint.rs
+index 2704bf65..68ea6d8b 100644
+--- a/src/protocol/endpoint.rs
++++ b/src/protocol/endpoint.rs
+@@ -235,6 +235,7 @@ mod tests {
+             focused_pane_id: None,
+             tab_bar_right: Vec::new(),
+             tab_bar_right_separator: String::new(),
++            sidebar_custom_lines: Vec::new(),
+             agent_view_label: None,
+             agent_order: Vec::new(),
+             workspaces: Vec::new(),
+diff --git a/src/protocol/wire.rs b/src/protocol/wire.rs
+index aba166d6..ec4c2bc8 100644
+--- a/src/protocol/wire.rs
++++ b/src/protocol/wire.rs
+@@ -947,6 +947,9 @@ pub struct ClientShellSnapshot {
+     pub focused_pane_id: Option<String>,
+     pub tab_bar_right: Vec<ClientShellTabStatusSegment>,
+     pub tab_bar_right_separator: String,
++    /// Fork: output lines for the custom sidebar section.
++    #[serde(default)]
++    pub sidebar_custom_lines: Vec<String>,
+     pub agent_view_label: Option<String>,
+     pub agent_order: Vec<String>,
+     pub workspaces: Vec<ClientShellWorkspace>,
+@@ -1015,6 +1018,15 @@ pub struct ClientShellCommand {
+     pub binding_labels: Vec<String>,
+     pub action: ClientShellCommandAction,
+     pub description: Option<String>,
++    /// Fork: set when this command is a sidebar launcher button.
++    #[serde(default)]
++    pub launcher: Option<ClientShellLauncher>,
++}
++
++#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
++pub struct ClientShellLauncher {
++    pub icon: String,
++    pub label: String,
+ }
+ 
+ #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+@@ -2703,6 +2715,7 @@ mod tests {
+                 accent: false,
+             }],
+             tab_bar_right_separator: " · ".into(),
++            sidebar_custom_lines: Vec::new(),
+             agent_view_label: None,
+             agent_order: Vec::new(),
+             workspaces: vec![ClientShellWorkspace {
+@@ -2746,6 +2759,7 @@ mod tests {
+                 binding_labels: vec!["prefix+z".into()],
+                 action: ClientShellCommandAction::Shell,
+                 description: Some("deploy".into()),
++                launcher: None,
+             }],
+         }));
+         let encoded = bincode::serde::encode_to_vec(&msg, bincode::config::standard()).unwrap();
+diff --git a/src/server/client_shell.rs b/src/server/client_shell.rs
+index d542896a..768d8f09 100644
+--- a/src/server/client_shell.rs
++++ b/src/server/client_shell.rs
+@@ -256,6 +256,7 @@ pub(super) fn snapshot_with_completions(
+         focused_pane_id,
+         tab_bar_right,
+         tab_bar_right_separator: app.state.tab_bar_right_separator.clone(),
++        sidebar_custom_lines: app.state.sidebar_custom_lines.clone(),
+         agent_view_label,
+         agent_order,
+         workspaces,
