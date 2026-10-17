@@ -25,6 +25,7 @@ As described by the user (this package has NOT seen the host repo — verify eac
 ## What is in this folder
 
 ```
+packages/retrieval-ui/    React components (palette, citation chips, token meter) — see its README
 packages/retrieval/       the library — plain TypeScript, no framework, ESM
   src/types.ts            shared contract (types + size limits) — the public API shape
   src/chunker.ts          web-tree-sitter chunker: TS/TSX/JS/Python/Rust/Go symbols + window fallback
