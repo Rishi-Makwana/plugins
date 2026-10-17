@@ -1,0 +1,7 @@
+[
+  {
+    "id": "fixture-index-service",
+    "prompt": "Where is the IndexService class defined, and which file handles authenticating WebSocket connections?",
+    "expect": ["IndexService", "token"]
+  }
+]

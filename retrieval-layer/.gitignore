@@ -1,0 +1,7 @@
+node_modules/
+*.db
+*.db-wal
+*.db-shm
+**/bench/results/
+**/bench/tasks*.local.json
+**/eval/*.local.json
