@@ -177,3 +177,20 @@ Package: `retrieval/` (plain TS, node:sqlite, web-tree-sitter). `npm test`: 52/5
 - macOS caveats: writes right after `watch()` can be missed (FSEvents start-up lag) and events from just before start are replayed. Run one `indexWorkspace` after starting the watcher and call `watcher.requestRescan()` on an interval (e.g. 60 s) as the safety net; it uses the same queue, so writes stay serial.
 - Chat memory (`src/chat.ts`): migration 2 adds `role`, `created_at`, index on `session_id`. `indexChatTurn` (idempotent per session/turn/role), `forgetSession`, `recall`. Turn index is stored in start_line/end_line; chat path is virtual `chat/<sessionId>`.
 - `search()` excludes chat unless `kinds` includes `'chat'`. New agent tool `mcp__retrieval__recall`.
+
+## Phase 4 results (2026-10-17)
+
+`npm test`: 99 pass, 1 skipped (real-model test, passes with `RETRIEVAL_REAL_MODEL=1`); `tsc --noEmit` clean.
+- Optional: `enableVectors` (sqlite-vec 0.1.9), `embedPending` (background, batched, abortable, resumable, content-hash stale check), `hybridSearch` / `hybridRecall` (RRF k=60, 50 candidates each; falls back to FTS, never throws on a query). Embedder interface + Transformers.js impl (`@huggingface/transformers` 4.3.1, `Xenova/bge-small-en-v1.5` int8, 384 dims).
+- Model: 34 MB download, warm load ~0.85 s, 21.5 chunks/s on M-series Mac (4,789 chunks in 223 s).
+- Eval (private TS repo, 947 files, 20 queries written after reading the code — not truly held out, n small):
+
+| Set | n | recall@5 FTS | recall@5 hybrid | MRR FTS | MRR hybrid |
+|---|---|---|---|---|---|
+| paraphrased | 10 | 0.40 | 0.70 | 0.283 | 0.350 |
+| keyword | 10 | 1.00 | 1.00 | 0.775 | 0.950 |
+| all | 20 | 0.70 | 0.85 | 0.529 | 0.650 |
+
+- Verdict per plan rule: kept (paraphrased recall@5 up, keyword not worse). Re-check with queries written blind.
+- Agent SDK, zod, transformers.js and sqlite-vec are optional peer dependencies: core install pulls none of them (79 MB, verified with `npm ci --omit=dev --omit=peer`).
+- Packaging risks: `onnxruntime-node` (native, ~288 MB all platforms — prune to target), `sharp` pulled in unused, both need `asarUnpack`; model download needs network once, set `cacheDir` to userData. Windows/Linux untested.

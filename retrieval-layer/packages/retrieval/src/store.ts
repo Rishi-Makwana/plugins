@@ -54,7 +54,8 @@ export const MIGRATIONS: string[] = [
 ]
 
 export function openStore(path: string | ':memory:'): DatabaseSync {
-  const db = new DatabaseSync(path)
+  // allowExtension only permits loadExtension(); nothing is loaded unless enableVectors is called.
+  const db = new DatabaseSync(path, { allowExtension: true })
   if (path !== ':memory:') db.exec('PRAGMA journal_mode=WAL')
   db.exec('PRAGMA busy_timeout=5000')
   db.exec('PRAGMA foreign_keys=ON')

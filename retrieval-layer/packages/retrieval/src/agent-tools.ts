@@ -2,6 +2,8 @@ import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import type { DatabaseSync } from 'node:sqlite'
 import { z } from 'zod'
+import { hybridSearch } from './hybrid.ts'
+import type { Embedder } from './types.ts'
 import { def, readRange, READ_MAX_LINES, recall, search } from './search.ts'
 
 export const RETRIEVAL_SERVER_NAME = 'retrieval'
@@ -22,15 +24,15 @@ const ok = (text: string): CallToolResult => ({ content: [{ type: 'text', text }
 const fail = (text: string): CallToolResult => ({ isError: true, content: [{ type: 'text', text }] })
 
 // Handlers must never throw: the agent gets an error result it can react to.
-async function guarded(run: () => string): Promise<CallToolResult> {
+async function guarded(run: () => string | Promise<string>): Promise<CallToolResult> {
   try {
-    return ok(run())
+    return ok(await run())
   } catch (error) {
     return fail(error instanceof Error ? error.message : String(error))
   }
 }
 
-export function createRetrievalTools({ db, root }: { db: DatabaseSync; root: string }) {
+export function createRetrievalTools({ db, root, embedder }: { db: DatabaseSync; root: string; embedder?: Embedder }) {
   const searchTool = tool(
     'search',
     SEARCH_DESCRIPTION,
@@ -41,11 +43,11 @@ export function createRetrievalTools({ db, root }: { db: DatabaseSync; root: str
       pathPrefix: z.string().optional().describe('Only files whose workspace-relative path starts with this'),
     },
     (args) =>
-      guarded(() => {
-        const hits = search(db, args)
+      guarded(async () => {
+        const hits = embedder ? await hybridSearch(db, embedder, args) : search(db, args)
         if (hits.length === 0) return 'No results.'
         return hits
-          .map((hit) => `${hit.path}:${hit.startLine}-${hit.endLine}  ${hit.symbol ?? '-'} (score ${hit.score.toFixed(1)})\n${hit.snippet}`)
+          .map((hit) => `${hit.path}:${hit.startLine}-${hit.endLine}  ${hit.symbol ?? '-'} (score ${hit.score.toFixed(embedder ? 3 : 1)})\n${hit.snippet}`)
           .join('\n\n')
       }),
     { annotations: { readOnlyHint: true } },
@@ -108,6 +110,6 @@ export function createRetrievalTools({ db, root }: { db: DatabaseSync; root: str
   return [searchTool, defTool, readTool, recallTool]
 }
 
-export function createRetrievalMcpServer(deps: { db: DatabaseSync; root: string }) {
+export function createRetrievalMcpServer(deps: { db: DatabaseSync; root: string; embedder?: Embedder }) {
   return createSdkMcpServer({ name: RETRIEVAL_SERVER_NAME, tools: createRetrievalTools(deps) })
 }

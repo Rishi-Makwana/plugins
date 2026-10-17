@@ -144,3 +144,12 @@ UI rendering performance is a separate task: see `UI-RENDERING.md`.
 - After each completed agent turn: `indexChatTurn(db, { sessionId, turnIndex, role, text, createdAt })` for the user message and the assistant reply. Expose a "forget this conversation" action that calls `forgetSession(db, sessionId)`.
 - The agent gets a fourth tool, `recall`. Add it to the RPC contract as `retrieval.recall` too if the GUI should search past chats.
 - The index DB now holds chat text: treat it as user data (same retention and deletion rules as your chat storage), not only as a rebuildable cache.
+
+## Phase 4 additions (optional vector + hybrid search)
+
+Only adopt this if keyword search misses paraphrased questions in your app; the core works without it.
+
+- Install the optional peers: `@huggingface/transformers`, `sqlite-vec` (plus `@anthropic-ai/claude-agent-sdk` and `zod` for the agent tools — reuse the host's existing copies; do not install a second SDK version).
+- Setup: `await enableVectors(db, { embedderId, dims, extensionPath })` (packaged Electron: sqlite-vec path rewritten to `app.asar.unpacked`, see Phase 0), create the embedder from `src/embedder-transformers.ts` with `cacheDir` under userData, then run `embedPending(db, embedder, { signal })` in the background after indexing and after watcher batches.
+- Use `hybridSearch` / `hybridRecall` instead of `search` / `recall`; pass the embedder to `createRetrievalTools` so the agent's `search` tool becomes hybrid. Both fall back to keyword search if vectors are unavailable.
+- Packaging: `asarUnpack` `**/*.node` and `**/*.dylib` (onnxruntime-node, sqlite-vec); prune onnxruntime binaries for other platforms; exclude `sharp` if unused. Expect ~20 chunks/s embedding on a laptop: a 16k-chunk repo takes ~13 min in the background on first open.

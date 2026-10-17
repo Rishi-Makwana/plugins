@@ -1,0 +1,6 @@
+[
+  { "type": "keyword", "q": "issueToken verifyToken", "expect": ["src/auth/token.ts"] },
+  { "type": "keyword", "q": "walkDirectory", "expect": ["src/index/walker.ts"] },
+  { "type": "paraphrase", "q": "check that a signed credential is genuine", "expect": ["src/auth/token.ts"] },
+  { "type": "paraphrase", "q": "run schema changes against the database", "expect": ["src/db/migrate.ts"] }
+]

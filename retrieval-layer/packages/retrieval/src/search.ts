@@ -26,11 +26,12 @@ export function buildMatchQuery(raw: string): string | null {
   return quoted.length === 0 ? null : quoted.join(' OR ')
 }
 
-function escapeLike(value: string): string {
+export function escapeLike(value: string): string {
   return value.replace(/[\\%_]/g, (char) => `\\${char}`)
 }
 
-interface Row {
+export interface Row {
+  id: number
   path: string
   start_line: number
   end_line: number
@@ -42,24 +43,24 @@ interface Row {
   created_at: number | null
 }
 
-function clampK(requested: number | undefined): number {
+export function clampK(requested: number | undefined): number {
   const k = Number.isFinite(requested) ? Math.trunc(requested as number) : DEFAULT_K
   return Math.min(Math.max(k, 1), SEARCH_MAX_K)
 }
 
-function rankedRows(db: DatabaseSync, where: string[], params: (string | number)[], k: number): Row[] {
+export function rankedRows(db: DatabaseSync, where: string[], params: (string | number)[], limit: number): Row[] {
   return db
     .prepare(
-      `select c.path, c.start_line, c.end_line, c.symbol, c.text, c.session_id, c.role, c.created_at,
+      `select c.id, c.path, c.start_line, c.end_line, c.symbol, c.text, c.session_id, c.role, c.created_at,
               bm25(chunks_fts, ${BM25_WEIGHT_TEXT}, ${BM25_WEIGHT_SYMBOL}, ${BM25_WEIGHT_PATH}, ${BM25_WEIGHT_TERMS}) as rank
        from chunks_fts join chunks c on c.id = chunks_fts.rowid
        where ${where.join(' and ')}
        order by rank limit ?`,
     )
-    .all(...params, k * CANDIDATE_MULTIPLIER) as unknown as Row[]
+    .all(...params, limit) as unknown as Row[]
 }
 
-const DEFAULT_SEARCH_KINDS = ['code', 'doc']
+export const DEFAULT_SEARCH_KINDS = ['code', 'doc']
 
 export function search(db: DatabaseSync, opts: SearchOptions): SearchHit[] {
   const match = buildMatchQuery(opts.query)
@@ -77,7 +78,7 @@ export function search(db: DatabaseSync, opts: SearchOptions): SearchHit[] {
     params.push(`${escapeLike(opts.pathPrefix)}%`)
   }
 
-  const rows = rankedRows(db, where, params, k)
+  const rows = rankedRows(db, where, params, k * CANDIDATE_MULTIPLIER)
 
   // LIKE is case-insensitive for ASCII; paths are not.
   const candidates = opts.pathPrefix ? rows.filter((row) => row.path.startsWith(opts.pathPrefix!)) : rows
@@ -94,7 +95,7 @@ export function search(db: DatabaseSync, opts: SearchOptions): SearchHit[] {
 }
 
 // Rows arrive best-first. A hit whose range strictly contains another hit in the same file is dropped.
-function dropContainers(rows: Row[]): Row[] {
+export function dropContainers(rows: Row[]): Row[] {
   return rows.filter((row, index) =>
     !rows.some(
       (other, otherIndex) =>
@@ -117,7 +118,7 @@ export function recall(db: DatabaseSync, opts: RecallOptions): RecallHit[] {
     where.push('c.session_id = ?')
     params.push(opts.sessionId)
   }
-  return rankedRows(db, where, params, k)
+  return rankedRows(db, where, params, k * CANDIDATE_MULTIPLIER)
     .slice(0, k)
     .map((row) => ({
       sessionId: row.session_id!,

@@ -25,6 +25,13 @@ export interface SearchOptions {
   pathPrefix?: string
 }
 
+export interface Embedder {
+  id: string
+  dims: number
+  // `kind` exists because many models prefix queries and documents differently.
+  embed(texts: string[], kind: 'query' | 'document'): Promise<Float32Array[]>
+}
+
 export type ChatRole = 'user' | 'assistant'
 
 export interface ChatTurn {
