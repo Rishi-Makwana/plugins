@@ -1,0 +1,7 @@
+export * from './types.ts'
+export { openStore, migrate, identifierTerms } from './store.ts'
+export { indexWorkspace, indexFile, removeFile } from './indexer.ts'
+export type { IndexFileResult } from './indexer.ts'
+export { search, def, readRange } from './search.ts'
+export { createChunker } from './chunker.ts'
+export type { ChunkerOptions, GrammarLang, WasmLang } from './chunker.ts'

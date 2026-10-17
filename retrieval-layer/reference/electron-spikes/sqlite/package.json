@@ -1,0 +1,40 @@
+{
+ "name": "spikeapp",
+ "version": "1.0.0",
+ "description": "spike",
+ "main": "main.js",
+ "scripts": {
+  "dev": "electron .",
+  "pack": "electron-builder --dir --mac --arm64"
+ },
+ "author": "x",
+ "license": "ISC",
+ "type": "commonjs",
+ "dependencies": {
+  "better-sqlite3": "13.0.3",
+  "sqlite-vec": "0.1.9"
+ },
+ "productName": "SpikeApp",
+ "build": {
+  "appId": "spike.app",
+  "mac": {
+   "identity": null,
+   "target": "dir"
+  },
+  "files": [
+   "main.js",
+   "worker.js",
+   "package.json"
+  ],
+  "asarUnpack": [
+   "**/*.node",
+   "**/*.dylib"
+  ],
+  "npmRebuild": true
+ },
+ "devDependencies": {
+  "electron": "40.10.6",
+  "electron-builder": "26.15.3",
+  "@electron/rebuild": "4.2.1"
+ }
+}

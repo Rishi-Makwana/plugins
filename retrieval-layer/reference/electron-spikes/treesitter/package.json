@@ -1,0 +1,48 @@
+{
+  "name": "tsspike",
+  "version": "1.0.0",
+  "description": "spike",
+  "main": "main.js",
+  "scripts": {
+    "dev": "electron .",
+    "pack": "electron-builder --dir --mac --arm64 -c.mac.identity=null -c.electronDist=node_modules/electron/dist -c.electronVersion=40.10.6"
+  },
+  "author": "x",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "web-tree-sitter": "^0.27.1"
+  },
+  "devDependencies": {
+    "electron": "^40.10.6",
+    "electron-builder": "^26.15.3",
+    "tree-sitter-typescript": "^0.23.2"
+  },
+  "productName": "TsSpike",
+  "private": true,
+  "build": {
+    "appId": "dev.spike.ts",
+    "files": [
+      "main.js",
+      "worker.js",
+      "sample.ts",
+      "package.json",
+      "node_modules/web-tree-sitter/web-tree-sitter.cjs",
+      "node_modules/web-tree-sitter/package.json"
+    ],
+    "mac": {
+      "target": "dir"
+    },
+    "npmRebuild": false,
+    "extraResources": [
+      {
+        "from": "node_modules/web-tree-sitter/web-tree-sitter.wasm",
+        "to": "wasm/web-tree-sitter.wasm"
+      },
+      {
+        "from": "node_modules/tree-sitter-typescript/tree-sitter-typescript.wasm",
+        "to": "wasm/tree-sitter-typescript.wasm"
+      }
+    ]
+  }
+}
