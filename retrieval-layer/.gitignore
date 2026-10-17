@@ -2,4 +2,5 @@ node_modules/
 *.db
 *.db-wal
 *.db-shm
-bench/results/raw/
+**/bench/results/
+**/bench/tasks.local.json

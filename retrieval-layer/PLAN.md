@@ -166,6 +166,6 @@ All checks pass in Electron 40.10.6 (bundled Node 24.15.0), both `electron .` de
 
 Package: `retrieval/` (plain TS, node:sqlite, web-tree-sitter). `npm test`: 52/52 pass; `tsc --noEmit` clean.
 - Acceptance (real chunker, fixture repo): `def('IndexService')` correct; `search('websocket auth token')` top 3 has connect handler; unchanged re-index writes 0 files.
-- Real repo (TeachingApp, 3,628 files): full index 3.3 s, 16,686 chunks; unchanged re-index 130 ms; queries 0.4–1.1 ms.
+- Real private repo (3,628 files): full index 3.3 s, 16,686 chunks; unchanged re-index 130 ms; queries 0.4–1.1 ms.
 - Choices to revisit: k<1 clamps to 1; overlapping hits keep the inner one regardless of score; all symlinks skipped; IndexStats.chunks is store total.
 - Known gap: duplicate checkouts (git worktrees / copied folders) under one root produce duplicate hits.
