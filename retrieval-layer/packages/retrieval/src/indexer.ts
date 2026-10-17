@@ -62,10 +62,47 @@ function walk(root: string, dirRel: string, scopes: IgnoreScope[], out: string[]
   }
 }
 
+// True when the indexer would never index relPath (always-skipped dir, .gitignore match, symlink in the chain).
+// A missing entry is judged as a file, so call this for deleted paths too.
+export function isPathIgnored(root: string, relPath: string): boolean {
+  const segments = relPath.split('/')
+  let scopes: IgnoreScope[] = []
+  let dirRel = ''
+  for (let i = 0; i < segments.length; i++) {
+    const gitignorePath = join(root, dirRel, '.gitignore')
+    if (existsSync(gitignorePath)) {
+      scopes = [...scopes, { dir: dirRel, matcher: ignore().add(readFileSync(gitignorePath, 'utf8')) }]
+    }
+    const rel = dirRel === '' ? segments[i]! : `${dirRel}/${segments[i]}`
+    if (ALWAYS_SKIPPED_DIRS.has(segments[i]!)) return true
+    let stat
+    try {
+      stat = lstatSync(join(root, rel))
+    } catch {
+      stat = undefined
+    }
+    if (stat?.isSymbolicLink()) return true
+    const isDir = i < segments.length - 1 || stat?.isDirectory() === true
+    if (isIgnored(scopes, rel, isDir)) return true
+    dirRel = rel
+  }
+  return false
+}
+
+// Chat chunks are virtual (path `chat/<session>`) and are never owned by a file.
 export function removeFile(db: DatabaseSync, relPath: string): void {
   inTransaction(db, () => {
-    db.prepare('delete from chunks where path = ?').run(relPath)
+    db.prepare("delete from chunks where path = ? and kind != 'chat'").run(relPath)
     db.prepare('delete from indexed_files where path = ?').run(relPath)
+  })
+}
+
+// Removes every indexed file under relDir (a directory that was deleted or moved away).
+export function removeDirectory(db: DatabaseSync, relDir: string): void {
+  const prefix = `${relDir}/`
+  inTransaction(db, () => {
+    db.prepare("delete from chunks where substr(path, 1, ?) = ? and kind != 'chat'").run(prefix.length, prefix)
+    db.prepare('delete from indexed_files where substr(path, 1, ?) = ?').run(prefix.length, prefix)
   })
 }
 
@@ -98,7 +135,7 @@ export async function indexFile(
   if (chunked === null) return skip(db, relPath)
 
   inTransaction(db, () => {
-    db.prepare('delete from chunks where path = ?').run(relPath)
+    db.prepare("delete from chunks where path = ? and kind != 'chat'").run(relPath)
     const insert = db.prepare(
       `insert into chunks (path, kind, symbol, symbol_kind, start_line, end_line, text, terms)
        values (?, ?, ?, ?, ?, ?, ?, ?)`,

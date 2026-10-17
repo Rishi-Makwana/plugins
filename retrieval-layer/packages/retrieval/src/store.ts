@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite'
 
-const MIGRATIONS: string[] = [
+export const MIGRATIONS: string[] = [
   `
   create table indexed_files (
     path text primary key,
@@ -44,6 +44,12 @@ const MIGRATIONS: string[] = [
     insert into chunks_fts(rowid, text, symbol, path, terms)
     values (new.id, new.text, new.symbol, new.path, new.terms);
   end;
+  `,
+  // Chat memory: nullable so existing code/doc rows are untouched. Chat turn index lives in start_line/end_line.
+  `
+  alter table chunks add column role text;
+  alter table chunks add column created_at integer;
+  create index chunks_session on chunks(session_id);
   `,
 ]
 

@@ -169,3 +169,11 @@ Package: `retrieval/` (plain TS, node:sqlite, web-tree-sitter). `npm test`: 52/5
 - Real private repo (3,628 files): full index 3.3 s, 16,686 chunks; unchanged re-index 130 ms; queries 0.4–1.1 ms.
 - Choices to revisit: k<1 clamps to 1; overlapping hits keep the inner one regardless of score; all symlinks skipped; IndexStats.chunks is store total.
 - Known gap: duplicate checkouts (git worktrees / copied folders) under one root produce duplicate hits.
+
+## Phase 3 results (2026-10-17)
+
+`npm test`: 84/84 pass, stable over repeated runs; `tsc --noEmit` clean. macOS only; Linux/Windows fs.watch untested.
+- Watcher (`src/watcher.ts`): stdlib `fs.watch` recursive, 300 ms per-path debounce, one serial queue, `.gitignore` change → full rescan, ignored paths never write, `close()` flushes pending edits. Edit → searchable well under 2 s in tests.
+- macOS caveats: writes right after `watch()` can be missed (FSEvents start-up lag) and events from just before start are replayed. Run one `indexWorkspace` after starting the watcher and call `watcher.requestRescan()` on an interval (e.g. 60 s) as the safety net; it uses the same queue, so writes stay serial.
+- Chat memory (`src/chat.ts`): migration 2 adds `role`, `created_at`, index on `session_id`. `indexChatTurn` (idempotent per session/turn/role), `forgetSession`, `recall`. Turn index is stored in start_line/end_line; chat path is virtual `chat/<sessionId>`.
+- `search()` excludes chat unless `kinds` includes `'chat'`. New agent tool `mcp__retrieval__recall`.

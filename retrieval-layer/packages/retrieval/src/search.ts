@@ -2,7 +2,7 @@ import { readFileSync, realpathSync } from 'node:fs'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
 import { identifierTerms } from './store.ts'
-import type { DefHit, SearchHit, SearchOptions } from './types.ts'
+import type { ChatRole, DefHit, RecallHit, RecallOptions, SearchHit, SearchOptions } from './types.ts'
 import { DEF_MAX_HITS, SEARCH_MAX_K, SNIPPET_MAX_LINES } from './types.ts'
 
 export const DEFAULT_K = 8
@@ -37,35 +37,47 @@ interface Row {
   symbol: string | null
   text: string
   rank: number
+  session_id: string | null
+  role: ChatRole | null
+  created_at: number | null
 }
 
-export function search(db: DatabaseSync, opts: SearchOptions): SearchHit[] {
-  const match = buildMatchQuery(opts.query)
-  if (match === null) return []
-  const requested = Number.isFinite(opts.k) ? Math.trunc(opts.k as number) : DEFAULT_K
-  const k = Math.min(Math.max(requested, 1), SEARCH_MAX_K)
+function clampK(requested: number | undefined): number {
+  const k = Number.isFinite(requested) ? Math.trunc(requested as number) : DEFAULT_K
+  return Math.min(Math.max(k, 1), SEARCH_MAX_K)
+}
 
-  const where = ['chunks_fts match ?']
-  const params: (string | number)[] = [match]
-  if (opts.kinds && opts.kinds.length > 0) {
-    where.push(`c.kind in (${opts.kinds.map(() => '?').join(', ')})`)
-    params.push(...opts.kinds)
-  }
-  if (opts.pathPrefix) {
-    where.push(`c.path like ? escape '\\'`)
-    params.push(`${escapeLike(opts.pathPrefix)}%`)
-  }
-  params.push(k * CANDIDATE_MULTIPLIER)
-
-  const rows = db
+function rankedRows(db: DatabaseSync, where: string[], params: (string | number)[], k: number): Row[] {
+  return db
     .prepare(
-      `select c.path, c.start_line, c.end_line, c.symbol, c.text,
+      `select c.path, c.start_line, c.end_line, c.symbol, c.text, c.session_id, c.role, c.created_at,
               bm25(chunks_fts, ${BM25_WEIGHT_TEXT}, ${BM25_WEIGHT_SYMBOL}, ${BM25_WEIGHT_PATH}, ${BM25_WEIGHT_TERMS}) as rank
        from chunks_fts join chunks c on c.id = chunks_fts.rowid
        where ${where.join(' and ')}
        order by rank limit ?`,
     )
-    .all(...params) as unknown as Row[]
+    .all(...params, k * CANDIDATE_MULTIPLIER) as unknown as Row[]
+}
+
+const DEFAULT_SEARCH_KINDS = ['code', 'doc']
+
+export function search(db: DatabaseSync, opts: SearchOptions): SearchHit[] {
+  const match = buildMatchQuery(opts.query)
+  if (match === null) return []
+  const k = clampK(opts.k)
+
+  const where = ['chunks_fts match ?']
+  const params: (string | number)[] = [match]
+  // Chat is private memory: only reachable by asking for it (or via recall).
+  const kinds = opts.kinds && opts.kinds.length > 0 ? opts.kinds : DEFAULT_SEARCH_KINDS
+  where.push(`c.kind in (${kinds.map(() => '?').join(', ')})`)
+  params.push(...kinds)
+  if (opts.pathPrefix) {
+    where.push(`c.path like ? escape '\\'`)
+    params.push(`${escapeLike(opts.pathPrefix)}%`)
+  }
+
+  const rows = rankedRows(db, where, params, k)
 
   // LIKE is case-insensitive for ASCII; paths are not.
   const candidates = opts.pathPrefix ? rows.filter((row) => row.path.startsWith(opts.pathPrefix!)) : rows
@@ -93,6 +105,28 @@ function dropContainers(rows: Row[]): Row[] {
         (other.start_line !== row.start_line || other.end_line !== row.end_line || otherIndex < index),
     ),
   )
+}
+
+export function recall(db: DatabaseSync, opts: RecallOptions): RecallHit[] {
+  const match = buildMatchQuery(opts.query)
+  if (match === null) return []
+  const k = clampK(opts.k)
+  const where = ['chunks_fts match ?', "c.kind = 'chat'"]
+  const params: (string | number)[] = [match]
+  if (opts.sessionId !== undefined) {
+    where.push('c.session_id = ?')
+    params.push(opts.sessionId)
+  }
+  return rankedRows(db, where, params, k)
+    .slice(0, k)
+    .map((row) => ({
+      sessionId: row.session_id!,
+      turnIndex: row.start_line,
+      role: row.role!,
+      createdAt: row.created_at!,
+      score: -row.rank,
+      snippet: row.text.split('\n').slice(0, SNIPPET_MAX_LINES).join('\n'),
+    }))
 }
 
 export function def(db: DatabaseSync, symbol: string): DefHit[] {

@@ -25,6 +25,32 @@ export interface SearchOptions {
   pathPrefix?: string
 }
 
+export type ChatRole = 'user' | 'assistant'
+
+export interface ChatTurn {
+  sessionId: string
+  turnIndex: number
+  role: ChatRole
+  text: string
+  // Epoch milliseconds.
+  createdAt: number
+}
+
+export interface RecallOptions {
+  query: string
+  k?: number
+  sessionId?: string
+}
+
+export interface RecallHit {
+  sessionId: string
+  turnIndex: number
+  role: ChatRole
+  createdAt: number
+  score: number
+  snippet: string
+}
+
 export interface SearchHit {
   path: string
   startLine: number

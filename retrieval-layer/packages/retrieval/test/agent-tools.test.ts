@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createRetrievalMcpServer, createRetrievalTools, RETRIEVAL_TOOL_NAMES } from '../src/agent-tools.ts'
+import { indexChatTurn } from '../src/chat.ts'
 import { indexWorkspace } from '../src/indexer.ts'
 import { openStore } from '../src/store.ts'
 import { createFakeChunker, createTempRepo, FIXTURE_REPO } from './helpers.ts'
@@ -19,7 +20,7 @@ async function toolsFor(root: string) {
 }
 
 test('full tool names follow mcp__<server>__<tool>', () => {
-  assert.deepEqual(RETRIEVAL_TOOL_NAMES, ['mcp__retrieval__search', 'mcp__retrieval__def', 'mcp__retrieval__read'])
+  assert.deepEqual(RETRIEVAL_TOOL_NAMES, ['mcp__retrieval__search', 'mcp__retrieval__def', 'mcp__retrieval__read', 'mcp__retrieval__recall'])
   const server = createRetrievalMcpServer({ db: openStore(':memory:'), root: FIXTURE_REPO })
   assert.equal(server.type, 'sdk')
   assert.equal(server.name, 'retrieval')
@@ -102,4 +103,15 @@ test('read path escape, absolute path, missing file and bad range return error r
     assert.ok(result.text.length > 0)
   }
   assert.match((await call('read', { path: '../../package.json', startLine: 1, endLine: 5 })).text, /escapes the workspace/)
+})
+
+test('recall returns session, turn, role and snippet in compact text; search never shows chat', async () => {
+  const { db, call } = await toolsFor(FIXTURE_REPO)
+  indexChatTurn(db, { sessionId: 'abc', turnIndex: 3, role: 'user', text: 'we chose quokka caching', createdAt: 0 })
+  const { text, isError } = await call('recall', { query: 'quokka' })
+  assert.equal(isError, false)
+  assert.match(text, /^session abc turn 3  user 1970-01-01T00:00:00\.000Z \(score \d+\.\d\)\nwe chose quokka caching$/)
+  assert.equal((await call('search', { query: 'quokka' })).text, 'No results.')
+  assert.equal((await call('recall', { query: 'zzzqqqxxxnotpresent' })).text, 'No results.')
+  assert.equal((await call('recall', { query: 'quokka', sessionId: 'other' })).text, 'No results.')
 })

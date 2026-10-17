@@ -137,3 +137,10 @@ Index only the folder the user opens as the workspace. Never index home or syste
 - Phase 5: GUI command palette, citation chips, token-per-turn counter.
 
 UI rendering performance is a separate task: see `UI-RENDERING.md`.
+
+## Phase 3 additions (freshness + chat memory)
+
+- After opening a workspace: `indexWorkspace(...)`, then `const watcher = watchWorkspace(db, root, chunker)`, then `setInterval(() => watcher.requestRescan(), 60_000)`. Call `await watcher.close()` on workspace close / app quit.
+- After each completed agent turn: `indexChatTurn(db, { sessionId, turnIndex, role, text, createdAt })` for the user message and the assistant reply. Expose a "forget this conversation" action that calls `forgetSession(db, sessionId)`.
+- The agent gets a fourth tool, `recall`. Add it to the RPC contract as `retrieval.recall` too if the GUI should search past chats.
+- The index DB now holds chat text: treat it as user data (same retention and deletion rules as your chat storage), not only as a rebuildable cache.
