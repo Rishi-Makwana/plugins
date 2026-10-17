@@ -3,4 +3,4 @@ node_modules/
 *.db-wal
 *.db-shm
 **/bench/results/
-**/bench/tasks.local.json
+**/bench/tasks*.local.json
