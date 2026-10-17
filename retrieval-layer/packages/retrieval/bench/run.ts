@@ -53,7 +53,7 @@ function fatal(message: string): never {
 
 function gitStatus(): string | null {
   try {
-    return execFileSync('git', ['-C', root, 'status', '--porcelain'], { encoding: 'utf8' })
+    return execFileSync('git', ['--no-optional-locks', '-C', root, 'status', '--porcelain'], { encoding: 'utf8' })
   } catch {
     return null
   }

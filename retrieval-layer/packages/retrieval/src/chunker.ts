@@ -265,7 +265,9 @@ export function createChunker(opts: ChunkerOptions = {}): Chunker {
   }
 
   async function chunkCode(lang: GrammarLang, lines: string[], content: string): Promise<Chunk[]> {
-    const [parser, language] = await Promise.all([getParser(), getLanguage(lang)])
+    // Language.load needs the runtime that Parser.init sets up, so it must not start before the parser resolves.
+    const parser = await getParser()
+    const language = await getLanguage(lang)
     // The parser is shared and setLanguage + parse are synchronous, so concurrent calls cannot interleave.
     parser.setLanguage(language)
     const tree = parser.parse(content)
