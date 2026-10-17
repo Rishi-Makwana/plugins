@@ -194,3 +194,10 @@ Package: `retrieval/` (plain TS, node:sqlite, web-tree-sitter). `npm test`: 52/5
 - Verdict per plan rule: kept (paraphrased recall@5 up, keyword not worse). Re-check with queries written blind.
 - Agent SDK, zod, transformers.js and sqlite-vec are optional peer dependencies: core install pulls none of them (79 MB, verified with `npm ci --omit=dev --omit=peer`).
 - Packaging risks: `onnxruntime-node` (native, ~288 MB all platforms — prune to target), `sharp` pulled in unused, both need `asarUnpack`; model download needs network once, set `cacheDir` to userData. Windows/Linux untested.
+
+## Phase 5 results (2026-10-17)
+
+New package `packages/retrieval-ui` (React 19.3.1, @base-ui/react 1.9.0, Tailwind 4.3.3, Vite 8.3.4): `CommandPalette`, `CitationChips`, `TokenMeter`, plus pure logic (`parseCitations`, `extractCitationsFromTurn`, `accumulateUsage`, palette state). No transport: host injects a `RetrievalClient`. Logic tests 26/26, `tsc` clean, demo builds.
+- Browser-checked in Chrome (demo, fake client): ⌘K and Ctrl+K open the palette; typing searches; ↑↓ moves `aria-activedescendant`; Enter opens the selected location, closes and returns focus to the trigger; Escape closes and returns focus; simulated error shows `role=alert` + live status; at 360 px no page-level horizontal scroll and every interactive element ≥ 44 px tall; light and dark render.
+- Not checked: screen reader speech output, measured contrast ratios, real Agent SDK message shapes (tests use hand-built objects), inside the host's LegendList/Lexical.
+- Per-turn cost is the difference of consecutive cumulative `total_cost_usd` values.
