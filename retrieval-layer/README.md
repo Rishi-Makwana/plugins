@@ -1,6 +1,6 @@
 # Retrieval layer — handoff for integration
 
-**If you are an AI coding agent: read this whole file before touching code.** It tells you what this is, what is proven, what is not, and how to integrate it into the host app without breaking anything.
+**If you are an AI coding agent: read `INTEGRATE.md` first — it is the decided plan. This file is the reference behind it.** It tells you what this is, what is proven, what is not, and how to integrate it into the host app without breaking anything.
 
 ## What this is
 
