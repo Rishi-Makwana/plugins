@@ -33,15 +33,15 @@ packages/retrieval/       the library — plain TypeScript, no framework, ESM
   src/indexer.ts          indexWorkspace(), indexFile(), removeFile() — gitignore-aware, hash-incremental
   src/search.ts           search(), def(), readRange()
   src/index.ts            public exports
-  test/                   52 tests (node:test), fixtures included
+  test/                   node:test suites (99 pass + 1 real-model test, skipped by default), fixtures included
 reference/electron-spikes Phase 0 proof that this runs in a packaged Electron 40 app (copy the packaging config, not the code)
-PLAN.md                   design, schema, tool contract, phase plan, Phase 0 + 1 results
+PLAN.md                   design, schema, tool contract, phase plan, results for Phases 0–5
 ```
 
 ## Proven vs not proven
 
 Observed (ran it):
-- 52/52 tests pass, `tsc --noEmit` clean (Node 26, TypeScript 7).
+- retrieval: 99 tests pass (+1 real-model test skipped by default); retrieval-ui: 26 logic tests pass; `tsc --noEmit` clean (Node 26, TypeScript 7).
 - In Electron 40.10.6 (bundled Node 24.15.0), dev **and** packaged macOS arm64 build, inside `utilityProcess`: `node:sqlite` FTS5 works; web-tree-sitter + grammar wasm load and parse.
 - Real repo of 3,628 files: full index 3.3 s, unchanged re-index 130 ms, queries 0.4–1.1 ms.
 
@@ -62,7 +62,7 @@ Verify the copy works before integrating:
 ```sh
 cd packages/retrieval
 npm ci --ignore-scripts
-npm test          # expect 52 pass, 0 fail
+npm test          # expect 99 pass, 0 fail, 1 skipped
 npx tsc --noEmit
 ```
 
